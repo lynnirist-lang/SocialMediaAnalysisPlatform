@@ -50,9 +50,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, inject, watch } from 'vue'
+import { ref, onMounted, onUnmounted, inject, watch } from 'vue'
 import * as echarts from 'echarts'
 import request from '../api/request'
+
 const globalDateRange = inject('globalDateRange')
 const globalSearch = inject('globalSearch')
 
@@ -66,6 +67,9 @@ const userStats = ref([
   { label: '传播层级', value: '-', icon: 'Histogram', color: 'purple' }
 ])
 
+let networkChart = null
+let roleChart = null
+
 const getRoleTagType = (role) => {
   const typeMap = {
     '核心传播者': 'danger',
@@ -77,36 +81,9 @@ const getRoleTagType = (role) => {
   return typeMap[role] || 'info'
 }
 
-// 监听变化并重新加载数据
-watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
-  loadData(newDates, newKeyword)
-}, { deep: true })
-
-const loadData = (dateRange, keyword) => {
-  const params = new URLSearchParams()
-
-  if (dateRange && dateRange.length === 2) {
-    params.append('start_date', dateRange[0].toISOString().split('T')[0])
-    params.append('end_date', dateRange[1].toISOString().split('T')[0])
-  }
-
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
-
-  // 发起API请求
-  fetch(`http://localhost:8000/api/dashboard?${params}`)
-    .then(res => res.json())
-    .then(data => {
-      // 更新图表数据
-    })
-}
-
-const initCharts = async () => {
+const loadData = async () => {
   const apiBase = '/api/user'
-
   try {
-    // 加载统计数据
     const statsRes = await request.get(`${apiBase}/stats`)
     if (statsRes.data.code === 200) {
       const stats = statsRes.data.data
@@ -118,19 +95,14 @@ const initCharts = async () => {
       ]
     }
 
-    // 加载列表
     const listRes = await request.get(`${apiBase}/list?page_size=10`)
-    userList.value = listRes.data.data.users
+    userList.value = listRes.data.data?.users || []
 
-    // 1. 绘制网络图
     const netRes = await request.get(`${apiBase}/network?top_n=30`)
-    if (netRes.data.code === 200 && netRes.data.data.nodes.length > 0) {
-      const netChart = echarts.init(networkChartRef.value)
-      netChart.setOption({
+    if (netRes.data.code === 200 && netRes.data.data.nodes.length > 0 && networkChart) {
+      networkChart.setOption({
         tooltip: {},
-        legend: [{
-          data: ['核心传播者', '意见领袖', '活跃参与者', '潜力用户', '普通用户']
-        }],
+        legend: [{ data: ['核心传播者', '意见领袖', '活跃参与者', '潜力用户', '普通用户'] }],
         series: [{
           type: 'graph',
           layout: 'force',
@@ -145,23 +117,15 @@ const initCharts = async () => {
             { name: '潜力用户' },
             { name: '普通用户' }
           ],
-          data: netRes.data.data.nodes.map(node => ({
-            ...node,
-            category: node.category
-          })),
+          data: netRes.data.data.nodes,
           links: netRes.data.data.links,
-          lineStyle: {
-            color: 'source',
-            curveness: 0.1
-          }
+          lineStyle: { color: 'source', curveness: 0.1 }
         }]
       })
     }
 
-    // 2. 绘制角色分布饼图
     const roleRes = await request.get(`${apiBase}/role-distribution`)
-    if (roleRes.data.code === 200 && roleRes.data.data.length > 0) {
-      const roleChart = echarts.init(roleChartRef.value)
+    if (roleRes.data.code === 200 && roleRes.data.data.length > 0 && roleChart) {
       roleChart.setOption({
         tooltip: { trigger: 'item' },
         legend: { orient: 'vertical', left: 'left' },
@@ -169,15 +133,8 @@ const initCharts = async () => {
           type: 'pie',
           radius: ['40%', '70%'],
           avoidLabelOverlap: false,
-          itemStyle: {
-            borderRadius: 10,
-            borderColor: '#fff',
-            borderWidth: 2
-          },
-          label: {
-            show: true,
-            formatter: '{b}: {c} ({d}%)'
-          },
+          itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
+          label: { show: true, formatter: '{b}: {c} ({d}%)' },
           data: roleRes.data.data
         }]
       })
@@ -187,8 +144,26 @@ const initCharts = async () => {
   }
 }
 
+watch([globalDateRange, globalSearch], () => {
+  loadData()
+}, { deep: true })
+
+const handleResize = () => {
+  networkChart?.resize()
+  roleChart?.resize()
+}
+
 onMounted(() => {
-  initCharts()
+  networkChart = echarts.init(networkChartRef.value)
+  roleChart = echarts.init(roleChartRef.value)
+  loadData()
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  networkChart?.dispose()
+  roleChart?.dispose()
 })
 </script>
 

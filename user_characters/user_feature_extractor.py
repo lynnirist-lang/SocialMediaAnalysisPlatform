@@ -9,7 +9,7 @@ from config.config import (
     POSTS_CLEANED_PATH,
     COMMENTS_CLEANED_PATH,
     CREATORS_01_PATH,
-    USER_CHARACTERS_OUTPUT_PATH, GeneratedFiles, DynamicFileManager
+    GeneratedFiles, DynamicFileManager
 )
 
 class UserFeatureExtractor:
@@ -52,50 +52,44 @@ class UserFeatureExtractor:
                 if not os.path.exists(path):
                     raise FileNotFoundError(f"文件不存在：{path}")
 
-                # 尝试不同编码
                 try:
                     df = pd.read_csv(path, encoding='utf-8-sig')
                 except UnicodeDecodeError:
                     try:
                         df = pd.read_csv(path, encoding='gbk')
-                    except:
+                    except Exception:
                         df = pd.read_csv(path, encoding='latin-1')
 
                 setattr(self, f'df_{key}', df)
-                print(f"   ✅ 加载 {key}: {len(df)} 行")
+                print(f"   OK 加载 {key}: {len(df)} 行")
 
-                # 单独加载用户画像表 - 优先使用环境变量,否则使用配置
-                creators_files_str = os.environ.get('CREATORS_FILES', '')
+            # 加载用户画像（循环外，只执行一次）
+            creators_files_str = os.environ.get('CREATORS_FILES', '')
+            if creators_files_str:
+                creators_files = [Path(f.strip()) for f in creators_files_str.split(';') if f.strip()]
+                print(f"   使用环境变量指定的创作者文件: {len(creators_files)} 个")
+            else:
+                creators_files = self.config.get('USERS_FILES', [])
 
-                if creators_files_str:
-                    # 从环境变量读取(由scheduler传递)
-                    creators_files = [Path(f.strip()) for f in creators_files_str.split(';') if f.strip()]
-                    print(f"   📥 使用环境变量指定的创作者文件: {len(creators_files)} 个")
+            if creators_files:
+                dfs_users = []
+                for creators_file in creators_files:
+                    file_path = str(creators_file)
+                    if os.path.exists(file_path):
+                        try:
+                            df_user = pd.read_csv(file_path, encoding='utf-8-sig')
+                            dfs_users.append(df_user)
+                            print(f"   OK 加载创作者文件：{os.path.basename(file_path)} ({len(df_user)} 行)")
+                        except Exception as e:
+                            print(f"   WARNING 加载 {file_path} 失败：{e}")
+                self.df_users_raw = pd.concat(dfs_users, ignore_index=True) if dfs_users else pd.DataFrame()
+                if not self.df_users_raw.empty:
+                    print(f"   OK 合并后用户画像表总数：{len(self.df_users_raw)} 行")
                 else:
-                    # 从配置文件读取(独立运行时)
-                    creators_files = self.config.get('USERS_FILES', [])
-
-                if creators_files:
-                    self.df_users_raw = pd.DataFrame()
-
-                    for creators_file in creators_files:
-                        file_path = str(creators_file) if isinstance(creators_file, type(Path())) else creators_file
-
-                        if os.path.exists(file_path):
-                            try:
-                                df_user = pd.read_csv(file_path, encoding='utf-8-sig')
-                                self.df_users_raw = pd.concat([self.df_users_raw, df_user], ignore_index=True)
-                                print(f"   ✅ 加载创作者文件：{os.path.basename(file_path)} ({len(df_user)} 行)")
-                            except Exception as e:
-                                print(f"   ⚠️ 加载 {file_path} 失败：{e}")
-
-                    if len(self.df_users_raw) > 0:
-                        print(f"   ✅ 合并后用户画像表总数：{len(self.df_users_raw)} 行")
-                    else:
-                        print("   ⚠️ 未找到任何创作者文件，粉丝数将全部为空")
-                else:
-                    self.df_users_raw = pd.DataFrame()
-                    print("   ⚠️ 未配置创作者文件，粉丝数将全部为空")
+                    print("   WARNING 未找到任何创作者文件，粉丝数将全部为空")
+            else:
+                self.df_users_raw = pd.DataFrame()
+                print("   WARNING 未配置创作者文件，粉丝数将全部为空")
             return True
         except Exception as e:
             print(f"❌ 数据加载失败：{e}")
@@ -190,68 +184,26 @@ class UserFeatureExtractor:
             f"   📊 粉丝数统计：min={min(self.user_profile_map.values()):.0f}, max={max(self.user_profile_map.values()):.0f}")
 
     def preprocess_time(self) -> None:
-        """统一时间戳格式并确定 STRICT 分析窗口"""
-        print("⏰ [3/7] 正在处理时间序列并锁定事件窗口...")
+        """统一时间戳格式，使用全部数据的时间范围作为分析窗口"""
+        print("[3/7] 正在处理时间序列...")
 
-        # 转换时间戳
         self.df_posts['create_time_dt'] = pd.to_datetime(self.df_posts['create_time'], unit='s', errors='coerce')
         self.df_comments['create_time_dt'] = pd.to_datetime(self.df_comments['create_time'], unit='s', errors='coerce')
 
-        # 移除转换失败的行
         self.df_posts = self.df_posts.dropna(subset=['create_time_dt'])
         self.df_comments = self.df_comments.dropna(subset=['create_time_dt'])
 
         if self.df_posts.empty:
             raise ValueError("帖子数据时间为空或格式错误")
 
-        # 【核心逻辑】自动检测数据最密集的连续2天
-        from collections import Counter
-
-        # 统计每天的帖子数
-        date_counts = Counter()
-        for dt in self.df_posts['create_time_dt']:
-            date_key = dt.strftime('%Y-%m-%d')
-            date_counts[date_key] += 1
-
-        sorted_dates = sorted(date_counts.keys())
-
-        selected_start = None
-        selected_end = None
-        max_count = 0
-
-        # 找到帖子最多的连续2天
-        for i in range(len(sorted_dates) - 1):
-            day1 = sorted_dates[i]
-            day2 = sorted_dates[i + 1]
-
-            # 检查是否连续
-            d1 = pd.to_datetime(day1)
-            d2 = pd.to_datetime(day2)
-            if (d2 - d1).days == 1:
-                total = date_counts[day1] + date_counts[day2]
-                if total > max_count:
-                    max_count = total
-                    selected_start = pd.to_datetime(f'{day1} 00:00:00')
-                    selected_end = pd.to_datetime(f'{day2} 23:59:59')
-
-        if not selected_start or max_count < 10:
-            print(f"   ⚠️ 警告：未找到数据密集的连续时间段。")
-            print(f"   💡  fallback: 将使用数据的最小/最大时间作为窗口 (可能包含历史脏数据)")
-            min_t = self.df_posts['create_time_dt'].min()
-            max_t = self.df_posts['create_time_dt'].max()
-            selected_start = min_t - timedelta(hours=self.window_hours_buffer)
-            selected_end = max_t + timedelta(hours=self.window_hours_buffer)
-        else:
-            print(
-                f"   🎯 自动检测到事件窗口：{selected_start.strftime('%Y-%m-%d')} 至 {selected_end.strftime('%Y-%m-%d')} (共{max_count}条帖子)")
-
-        self.event_start = selected_start
-        self.event_end = selected_end
-
-        # === 新增：计算事件持续时间（小时）===
+        min_t = self.df_posts['create_time_dt'].min()
+        max_t = self.df_posts['create_time_dt'].max()
+        self.event_start = min_t - timedelta(hours=self.window_hours_buffer)
+        self.event_end = max_t + timedelta(hours=self.window_hours_buffer)
         self.event_duration_hours = (self.event_end - self.event_start).total_seconds() / 3600
 
-        print(f"   ✂️ 严格事件窗口设定：{self.event_start} 至 {self.event_end} (共{self.event_duration_hours:.1f}小时)")
+        print(f"   时间范围：{min_t.strftime('%Y-%m-%d')} ~ {max_t.strftime('%Y-%m-%d')} "
+              f"({self.event_duration_hours:.1f} 小时，共 {len(self.df_posts)} 条帖子)")
 
     def extract_keywords(self) -> bool:
         """从 BERTopic 文件中提取关键词列表"""

@@ -250,70 +250,92 @@ class DataCollectorScheduler:
             traceback.print_exc()
 
     def _trigger_downstream_tasks(self, env=None):
-        """触发下游分析任务(BERTopic + 用户画像)"""
+        """触发下游分析任务(BERTopic + 情感分析并行 + 用户画像)"""
         project_root = Path(__file__).parent.parent
 
         if env is None:
             env = os.environ.copy()
 
-        # 6.1 运行BERTopic主题分析
-        print("   🧠 5.1 启动BERTopic主题分析...")
-        bertopic_script = project_root / "data_collector" / "analysis" / "run_bertopic.py"
+        today_str = datetime.now().strftime('%Y%m%d')
 
-        if bertopic_script.exists():
-            result = subprocess.run(
+        # 6.1 BERTopic：若今日输出已存在则跳过，否则以非阻塞方式启动
+        bertopic_script = project_root / "data_collector" / "analysis" / "run_bertopic.py"
+        bertopic_proc = None
+
+        existing_topic = DynamicFileManager.get_latest_bertopic_topics()
+        if existing_topic and today_str in existing_topic.name:
+            print(f"   [SKIP] 今日 BERTopic 输出已存在: {existing_topic.name}，跳过重训练")
+        elif bertopic_script.exists():
+            print("   [START] 5.1 BERTopic 主题分析（后台启动）...")
+            bertopic_proc = subprocess.Popen(
                 [sys.executable, str(bertopic_script)],
                 cwd=str(project_root),
-                timeout=1800,
                 env=env
             )
-
-            if result.returncode == 0:
-                topics_file = DynamicFileManager.get_latest_bertopic_topics()
-                if topics_file:
-                    print(f"   ✅ BERTopic完成 → {topics_file.name}")
-                else:
-                    print("   ⚠️ BERTopic执行成功但未找到输出文件")
-            else:
-                print(f"   ❌ BERTopic失败 (退出码: {result.returncode})")
-                return
         else:
-            print(f"   ⚠️ BERTopic脚本不存在: {bertopic_script}")
-            return
+            print(f"   [WARN] BERTopic 脚本不存在: {bertopic_script}")
 
-        # 6.1.5 执行情感分析并生成 merged 文件
-        print("   💭 5.1.5 启动情感分析和数据合并...")
+        # 6.1.5 情感分析（与 BERTopic 并行执行）
+        print("   [START] 5.1.5 情感预测（与 BERTopic 并行）...")
+        sentiment_ok = False
         try:
             from data_collector.model.predict import process_file
 
             posts_file = DynamicFileManager.get_latest_posts_cleaned()
             if posts_file:
                 match = re.search(r'(\d{8})', posts_file.name)
-                date_str = match.group(1) if match else datetime.now().strftime('%Y%m%d')
-
+                date_str = match.group(1) if match else today_str
                 output_file = SENTIMENT_DATA_DIR / f"posts_model_{date_str}.csv"
 
                 if not output_file.exists():
-                    print(f"      🔄 执行情感预测: {posts_file.name}")
+                    print(f"      [RUN] 执行情感预测: {posts_file.name}")
                     success = process_file(posts_file, output_file, "posts")
                     if not success:
-                        print(f"      ⚠️ 情感预测失败")
+                        print("      [WARN] 情感预测失败")
+                    else:
+                        sentiment_ok = True
                 else:
-                    print(f"      ✅ 情感文件已存在: {output_file.name}")
+                    print(f"      [SKIP] 情感文件已存在: {output_file.name}")
+                    sentiment_ok = True
+            else:
+                print("      [WARN] 未找到帖子文件，跳过情感分析")
+        except Exception as e:
+            print(f"      [WARN] 情感分析失败: {e}")
+            import traceback
+            traceback.print_exc()
 
-                print(f"      🔗 生成合并文件...")
+        # 等待 BERTopic 完成（最多 30 分钟）
+        if bertopic_proc is not None:
+            print("   [WAIT] 等待 BERTopic 完成...")
+            try:
+                bertopic_proc.wait(timeout=1800)
+                if bertopic_proc.returncode == 0:
+                    topics_file = DynamicFileManager.get_latest_bertopic_topics()
+                    if topics_file:
+                        print(f"   [OK] BERTopic 完成 -> {topics_file.name}")
+                    else:
+                        print("   [WARN] BERTopic 执行成功但未找到输出文件")
+                else:
+                    print(f"   [FAIL] BERTopic 失败 (退出码: {bertopic_proc.returncode})")
+            except subprocess.TimeoutExpired:
+                bertopic_proc.kill()
+                print("   [FAIL] BERTopic 超时 (30min)，已终止")
+
+        # 数据合并（BERTopic + 情感均完成后执行）
+        try:
+            posts_file = DynamicFileManager.get_latest_posts_cleaned()
+            if posts_file and sentiment_ok:
+                print("      [RUN] 生成合并文件...")
                 merged_files = DynamicFileManager.merge_all_posts_with_sentiment_and_topic()
                 if merged_files:
-                    print(f"      ✅ 合并完成: {merged_files[-1].name}")
+                    print(f"      [OK] 合并完成: {merged_files[-1].name}")
                     df_check = pd.read_csv(merged_files[-1], encoding='utf-8-sig')
                     sent_count = df_check['sentiment'].notna().sum() if 'sentiment' in df_check.columns else 0
-                    print(f"      📊 统计: {len(df_check)} 条, 含情感: {sent_count}")
+                    print(f"      [STAT] {len(df_check)} 条, 含情感: {sent_count}")
                 else:
-                    print(f"      ⚠️ 合并失败")
-            else:
-                print(f"      ⚠️ 未找到帖子文件，跳过情感分析")
+                    print("      [WARN] 合并失败")
         except Exception as e:
-            print(f"      ⚠️ 情感分析/合并失败: {e}")
+            print(f"      [WARN] 合并失败: {e}")
             import traceback
             traceback.print_exc()
 

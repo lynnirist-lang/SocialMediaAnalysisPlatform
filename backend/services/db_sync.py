@@ -146,23 +146,37 @@ def _row_to_user_stats(row: pd.Series, stats_date: str) -> UserStats:
 
 
 def _upsert_posts(session: Session, df: pd.DataFrame, source_date: str) -> int:
-    count = 0
-    for _, row in df.iterrows():
-        note_id = str(row.get("note_id", ""))
-        if not note_id or note_id == "nan":
-            continue
+    valid = [
+        (str(row.get("note_id", "")), row)
+        for _, row in df.iterrows()
+        if str(row.get("note_id", "")) not in ("", "nan")
+    ]
+    if not valid:
+        return 0
+
+    note_ids = [nid for nid, _ in valid]
+    existing = {
+        p.note_id: p
+        for p in session.query(Post).filter(Post.note_id.in_(note_ids)).all()
+    }
+
+    _UPDATE_ATTRS = (
+        "user_id", "create_time", "create_date_time", "content", "cleaned_content",
+        "nickname", "sentiment", "confidence", "topic", "source_date", "data_json",
+    )
+    new_posts = []
+    for note_id, row in valid:
         entity = _row_to_post(row, source_date)
-        existing = session.query(Post).filter(Post.note_id == note_id).first()
-        if existing:
-            for attr in (
-                "user_id", "create_time", "create_date_time", "content", "cleaned_content",
-                "nickname", "sentiment", "confidence", "topic", "source_date", "data_json",
-            ):
-                setattr(existing, attr, getattr(entity, attr))
+        if note_id in existing:
+            for attr in _UPDATE_ATTRS:
+                setattr(existing[note_id], attr, getattr(entity, attr))
         else:
-            session.add(entity)
-        count += 1
-    return count
+            new_posts.append(entity)
+
+    if new_posts:
+        session.bulk_save_objects(new_posts)
+
+    return len(valid)
 
 
 def _upsert_comments(session: Session, df: pd.DataFrame, source_date: str) -> int:

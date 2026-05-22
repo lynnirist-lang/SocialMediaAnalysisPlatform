@@ -6,7 +6,8 @@ from transformers import BertTokenizer, BertForSequenceClassification, Trainer, 
 from datasets import load_dataset, Dataset, ClassLabel 
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 import numpy as np
-from config.config import FINAL_MODEL_DIR, RESULTS_FINETUNE_DIR, setup_environment, FINE_TUNED_MODEL_DIR
+from config.config import FINAL_MODEL_DIR, RESULTS_FINETUNE_DIR, setup_environment, FINE_TUNED_MODEL_DIR, SENTIMENT_MODEL_PATH
+setup_environment()
 
 # ================= 配置区域 =================
 # 1. 模型选择
@@ -20,12 +21,9 @@ EPOCHS = 3  # 训练轮数
 LEARNING_RATE = 1e-5
 
 # 3. 文件路径
-DATA_FILE = "sentiment_model.csv"  # 数据文件名
+DATA_FILE = str(SENTIMENT_MODEL_PATH)  # 数据文件绝对路径
 OUTPUT_DIR = str(RESULTS_FINETUNE_DIR)  # 训练输出目录
 FINAL_MODEL_PATH = str(FINE_TUNED_MODEL_DIR)  # 最终模型保存目录
-
-os.environ['TRANSFORMERS_CACHE'] = './cache/transformers'
-os.environ['HF_HOME'] = './cache/huggingface'
 
 # ================= 1. 检查设备 =================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

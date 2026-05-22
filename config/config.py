@@ -7,13 +7,19 @@ from datetime import datetime, timedelta
 import glob
 import re
 
+# ==================== 自动加载 .env 文件 ====================
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+except ImportError:
+    pass
+
 # ==================== 项目根目录 ====================
 PROJECT_ROOT = Path(__file__).parent.parent  # 指向 SocialMediaAnalysis 根目录
 
 # ==================== 主要目录 ====================
 DATA_COLLECTOR_DIR = PROJECT_ROOT / "data_collector"
 WORDS_DIR = PROJECT_ROOT / "words"
-LOGS_DIR = PROJECT_ROOT / "logs"
 USER_CHARACTERS_DIR = PROJECT_ROOT / "user_characters"
 
 # ==================== 分析模型相关 ====================
@@ -36,17 +42,15 @@ AUTHOR_DIR = WORDS_DIR / "author"
 CREATORS_01_PATH = AUTHOR_DIR / "creators_01.csv"
 CREATORS_02_PATH = AUTHOR_DIR / "creators_02.csv"
 CREATORS_03_PATH = AUTHOR_DIR / "creators_03.csv"
-CREATORS_FILES = [CREATORS_01_PATH, CREATORS_02_PATH, CREATORS_03_PATH]
 
-# 评论用户数据文件模式23
+# 评论用户数据文件模式
 COMMENT_USERS_PATTERN = 'search_comment_users_*.csv'
 
 # 分析结果数据
 ANALYSIS_DATA_DIR = WORDS_DIR / "analysis_data"
 
-# 用户特征结果
+# 用户特征结果（按日期动态生成，使用 GeneratedFiles.get_user_stats_path()）
 USER_CHARACTERS_DATA_DIR = WORDS_DIR / "user_characters"
-USER_CHARACTERS_OUTPUT_PATH = USER_CHARACTERS_DATA_DIR / "df_user_stats.csv"
 
 # ==================== 资源文件 ====================
 STOPWORDS_PATH = WORDS_DIR / "stopwords_hit.txt"
@@ -56,13 +60,15 @@ USER_DICT_PATH = WORDS_DIR / "user_dict.txt"
 # 预训练模型
 
 FINE_TUNED_MODEL_DIR = DATA_COLLECTOR_DIR / "fine_tuned_model_final"
+FINAL_MODEL_DIR = DATA_COLLECTOR_DIR / "fine_tuned_model_final"
 
 # 微调输出
 RESULTS_FINETUNE_DIR = DATA_COLLECTOR_DIR / "results_finetune"
 
 # ==================== 外部数据源 (MediaCrawler) ====================
-# 注意：这是外部项目路径，可能需要根据实际情况调整
-MEDIA_CRAWLER_DATA_DIR = Path(r"E:\MyProjects\MediaCrawler\data\weibo\csv")
+MEDIA_CRAWLER_DATA_DIR = Path(
+    os.getenv("MEDIA_CRAWLER_DATA_DIR", r"E:\MyProjects\MediaCrawler\data\weibo\csv")
+)
 
 # ==================== SQLite 数据库 ====================
 DATA_DIR = PROJECT_ROOT / "data"
@@ -174,13 +180,13 @@ def ensure_dirs_exist():
     """确保所有必要的目录存在"""
     dirs = [
         DATA_DIR,
-        LOGS_DIR,
         CACHE_DIR,
         TRANSFORMERS_CACHE_DIR,
         HF_HOME_DIR,
         CLEANED_DATA_DIR,
         SENTIMENT_DATA_DIR,
         ANALYSIS_DATA_DIR,
+        RESULTS_FINETUNE_DIR,
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -203,8 +209,8 @@ def get_path(key: str) -> Path | None:
         'USER_DICT': USER_DICT_PATH,
         'BERTOPIC_MODEL': BERTOPIC_MODEL_DIR,
         'FINE_TUNED_MODEL': FINE_TUNED_MODEL_DIR,
+        'FINAL_MODEL': FINAL_MODEL_DIR,
         'CREATORS_01': CREATORS_01_PATH,
-        'USER_CHARACTERS_OUTPUT': USER_CHARACTERS_OUTPUT_PATH,
     }
     return path_map.get(key)
 
@@ -219,10 +225,10 @@ PATHS = {
     'user_dict': USER_DICT_PATH,
     'bertopic_model': BERTOPIC_MODEL_DIR,
     'fine_tuned_model': FINE_TUNED_MODEL_DIR,
+    'final_model': FINAL_MODEL_DIR,
     'creators_01': CREATORS_01_PATH,
     'creators_02': CREATORS_02_PATH,
     'creators_03': CREATORS_03_PATH,
-    'user_characters_output': USER_CHARACTERS_OUTPUT_PATH,
     'media_crawler_data': MEDIA_CRAWLER_DATA_DIR,
 }
 
@@ -613,5 +619,6 @@ STATIC_PATHS = {
     'user_dict': USER_DICT_PATH,
     'bertopic_model': BERTOPIC_MODEL_DIR,
     'fine_tuned_model': FINE_TUNED_MODEL_DIR,
+    'final_model': FINAL_MODEL_DIR,
     'media_crawler_data': MEDIA_CRAWLER_DATA_DIR,
 }

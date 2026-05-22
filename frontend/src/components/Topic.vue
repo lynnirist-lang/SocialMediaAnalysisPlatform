@@ -44,105 +44,96 @@ const keywordRank = ref([])
 const globalDateRange = inject('globalDateRange')
 const globalSearch = inject('globalSearch')
 
-let charts = []
+let clusterChart = null
+let barChart = null
 
+const fetchRank = async () => {
+  try {
+    const res = await request.get(`${API_BASE}/keywords?top_n=10`)
+    if (res.data.code === 200) keywordRank.value = res.data.data
+  } catch (e) { console.error('Rank error:', e) }
+}
 
-// 监听变化并重新加载数据
-watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
-  loadData(newDates, newKeyword)
+const updateCluster = async () => {
+  if (!clusterChart) return
+  try {
+    const res = await request.get(`${API_BASE}/clusters`)
+    if (res.data.code === 200) {
+      const { nodes, links, categories } = res.data.data
+      clusterChart.setOption({
+        tooltip: {},
+        legend: [{ data: categories.map(a => a.name), bottom: 10 }],
+        series: [{
+          type: 'graph',
+          layout: 'force',
+          data: nodes,
+          links: links,
+          categories: categories,
+          roam: true,
+          label: { show: true, position: 'right' },
+          force: { repulsion: 100, edgeLength: 50 }
+        }]
+      })
+    }
+  } catch (e) { console.error('Cluster error:', e) }
+}
+
+const updateBar = async () => {
+  if (!barChart) return
+  try {
+    const res = await request.get(`${API_BASE}/bar`)
+    if (res.data.code === 200) {
+      const { topics, categories, positive, neutral, negative } = res.data.data
+      const displayLabels = topics.map((_, i) => `${categories[i]}`)
+      barChart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { bottom: 0, icon: 'circle' },
+        grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
+        xAxis: { type: 'value' },
+        yAxis: {
+          type: 'category',
+          data: displayLabels,
+          axisLabel: {
+            interval: 0,
+            formatter: v => v.length > 15 ? v.substring(0, 15) + '...' : v
+          }
+        },
+        series: [
+          { name: '积极', type: 'bar', stack: 'total', color: '#67C23A', data: positive },
+          { name: '中性', type: 'bar', stack: 'total', color: '#E6A23C', data: neutral },
+          { name: '消极', type: 'bar', stack: 'total', color: '#F56C6C', data: negative }
+        ]
+      })
+    }
+  } catch (e) { console.error('Bar error:', e) }
+}
+
+const loadData = () => {
+  fetchRank()
+  updateCluster()
+  updateBar()
+}
+
+watch([globalDateRange, globalSearch], () => {
+  loadData()
 }, { deep: true })
 
-const loadData = (dateRange, keyword) => {
-  const params = new URLSearchParams()
-
-  if (dateRange && dateRange.length === 2) {
-    params.append('start_date', dateRange[0].toISOString().split('T')[0])
-    params.append('end_date', dateRange[1].toISOString().split('T')[0])
-  }
-
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
-
-  // 发起API请求
-  fetch(`http://localhost:8000/api/dashboard?${params}`)
-    .then(res => res.json())
-    .then(data => {
-      // 更新图表数据
-    })
-}
-
-// 1. 获取排行榜
-const fetchRank = async () => {
-  const res = await request.get(`${API_BASE}/keywords?top_n=10`)
-  if (res.data.code === 200) keywordRank.value = res.data.data
-}
-
-// 2. 初始化聚类图 (对应截图左侧)
-const initCluster = async () => {
-  const myChart = echarts.init(clusterChartRef.value)
-  const res = await request.get(`${API_BASE}/clusters`)
-  if (res.data.code === 200) {
-    const { nodes, links, categories } = res.data.data
-    myChart.setOption({
-      tooltip: {},
-      legend: [{ data: categories.map(a => a.name), bottom: 10 }],
-      series: [{
-        type: 'graph',
-        layout: 'force',
-        data: nodes,
-        links: links,
-        categories: categories,
-        roam: true,
-        label: { show: true, position: 'right' },
-        force: { repulsion: 100, edgeLength: 50 }
-      }]
-    })
-    charts.push(myChart)
-  }
-}
-
-// 3. 初始化情感分布柱状图 (对应截图右下)
-const initBar = async () => {
-  const myChart = echarts.init(barChartRef.value)
-  const res = await request.get(`${API_BASE}/bar`)
-  if (res.data.code === 200) {
-    const { topics, categories, positive, neutral, negative } = res.data.data
-
-    // 组合话题名和分类，例如："明星角色塑造与时尚多元 (娱乐八卦)"
-    const displayLabels = topics.map((topic, index) => {
-      return `${categories[index]}`
-    })
-
-    myChart.setOption({
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      legend: { bottom: 0, icon: 'circle' },
-      grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
-      xAxis: { type: 'value' },
-      yAxis: {
-        type: 'category',
-        data: displayLabels, // 使用带分类的标签
-        axisLabel: {
-          interval: 0,
-          formatter: (value) => {
-            // 如果标签太长，可以换行显示
-            return value.length > 15 ? value.substring(0, 15) + '...' : value
-          }
-        }
-      },
-      series: [
-        { name: '积极', type: 'bar', stack: 'total', color: '#67C23A', data: positive },
-        { name: '中性', type: 'bar', stack: 'total', color: '#E6A23C', data: neutral },
-        { name: '消极', type: 'bar', stack: 'total', color: '#F56C6C', data: negative }
-      ]
-    })
-    charts.push(myChart)
-  }
+const handleResize = () => {
+  clusterChart?.resize()
+  barChart?.resize()
 }
 
 onMounted(() => {
-  fetchRank(); initCluster(); initBar();
-  window.addEventListener('resize', () => charts.forEach(c => c.resize()))
+  clusterChart = echarts.init(clusterChartRef.value)
+  barChart = echarts.init(barChartRef.value)
+  loadData()
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  clusterChart?.dispose()
+  barChart?.dispose()
 })
 </script>
 

@@ -20,22 +20,19 @@ async def get_dashboard_summary(
     end_date: date = Query(default=None)
 ):
     """获取数据看板顶部的三个统计指标"""
-    # 移除日期参数，全量加载
     data_loader = get_data_loader()
     df_posts = data_loader.load_posts()
-    df_users = data_loader.load_user_stats()
+    df_comments = data_loader.load_comments()
 
     total_posts = len(df_posts)
     total_users = df_posts['user_id'].nunique() if not df_posts.empty else 0
+    total_comments = len(df_comments)
 
-    # 检查情感分数字段是否存在
     if not df_posts.empty and 'sentiment_score' in df_posts.columns:
         avg_sentiment = float(df_posts['sentiment_score'].mean())
     elif not df_posts.empty and 'sentiment' in df_posts.columns:
-        # 如果没有分值只有标签，简单映射为 1, -1, 0 求均值
         score_map = {'积极': 1, '中性': 0, '消极': -1}
-        df_posts['sentiment_score'] = df_posts['sentiment'].map(score_map)
-        avg_sentiment = float(df_posts['sentiment_score'].mean())
+        avg_sentiment = float(df_posts['sentiment'].map(score_map).mean())
     else:
         avg_sentiment = 0.0
 
@@ -44,6 +41,7 @@ async def get_dashboard_summary(
         data={
             "total_posts": total_posts,
             "total_users": total_users,
+            "total_comments": total_comments,
             "avg_sentiment": round(avg_sentiment, 2)
         }
     )

@@ -35,6 +35,10 @@ data_collector/analysis/my_local_model/
 *.pth
 *.onnx
 
+# ===== 敏感配置 =====
+.env
+.env.local
+
 # ===== 报告输出 =====
 reports/
 

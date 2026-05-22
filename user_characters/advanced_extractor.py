@@ -119,9 +119,12 @@ class AdvancedUserFeatureExtractor(UserFeatureExtractor):
             print(f"   ⚠️ 昵称映射表为空，昵称为空")
 
         # 合并所有特征
-        self.result_df = df_stats.merge(network_df, on='user_id', how='left')
-        self.result_df = self.result_df.merge(behavioral_df, on='user_id', how='left')
-        self.result_df = self.result_df.merge(content_df, on='user_id', how='left')
+        self.result_df = (
+            df_stats
+            .merge(network_df, on='user_id', how='left')
+            .merge(behavioral_df, on='user_id', how='left')
+            .merge(content_df, on='user_id', how='left')
+        )
 
         # 填充 NaN 值
         fill_dict = {

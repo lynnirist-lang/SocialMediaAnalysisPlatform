@@ -73,45 +73,35 @@ const globalSearch = inject('globalSearch')
 
 const lineChartRef = ref(null)
 const heatmapRef = ref(null)
-let charts = []
 
+let lineChart = null
+let heatmapChart = null
 
-// 监听变化并重新加载数据
-watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
-  loadData(newDates, newKeyword)
-}, { deep: true })
-
-const loadData = (dateRange, keyword) => {
-  const params = new URLSearchParams()
-
-  if (dateRange && dateRange.length === 2) {
-    params.append('start_date', dateRange[0].toISOString().split('T')[0])
-    params.append('end_date', dateRange[1].toISOString().split('T')[0])
+const buildQS = (dateRange, keyword) => {
+  const p = new URLSearchParams()
+  if (dateRange?.length === 2) {
+    const fmt = d => d instanceof Date ? d.toISOString().split('T')[0] : String(d)
+    p.append('start_date', fmt(dateRange[0]))
+    p.append('end_date', fmt(dateRange[1]))
   }
-
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
-
-  // 发起API请求
-  fetch(`http://localhost:8000/api/dashboard?${params}`)
-    .then(res => res.json())
-    .then(data => {
-      // 更新图表数据
-    })
+  if (keyword) p.append('keyword', keyword)
+  const s = p.toString()
+  return s ? `?${s}` : ''
 }
 
-// 1. 初始化情感趋势图
-const initLineChart = async () => {
-  const myChart = echarts.init(lineChartRef.value)
+const updateLineChart = async (dateRange, keyword) => {
+  if (!lineChart) return
   try {
-    const res = await request.get(`${API_BASE}/trend`)
+    const res = await request.get(`${API_BASE}/trend${buildQS(dateRange, keyword)}`)
     const { dates, scores } = res.data.data
-    myChart.setOption({
+    const minScore = scores.length ? Math.min(...scores) : -1
+    const maxScore = scores.length ? Math.max(...scores) : 1
+    const pad = 0.1
+    lineChart.setOption({
       tooltip: { trigger: 'axis' },
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
       xAxis: { type: 'category', data: dates, boundaryGap: false },
-      yAxis: { type: 'value', min: -1, max: 1 },
+      yAxis: { type: 'value', min: Math.floor((minScore - pad) * 10) / 10, max: Math.ceil((maxScore + pad) * 10) / 10 },
       series: [{
         name: '情感得分',
         type: 'line',
@@ -122,71 +112,76 @@ const initLineChart = async () => {
         itemStyle: { color: '#409EFF' }
       }]
     })
-    charts.push(myChart)
-  } catch (e) { console.error(e) }
+  } catch (e) { console.error('LineChart error:', e) }
 }
 
-// 2. 初始化热力图
-const initHeatmap = async () => {
-  const myChart = echarts.init(heatmapRef.value)
+const updateHeatmap = async () => {
+  if (!heatmapChart) return
   try {
     const res = await request.get(`${API_BASE}/heatmap`)
-    const hours = Array.from({length: 24}, (_, i) => `${i}:00`)
+    const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
     const days = ['周日', '周六', '周五', '周四', '周三', '周二', '周一']
+    const heatData = res.data.data
+    const maxVal = Math.max(...heatData.map(d => d[2]), 1)
 
-    myChart.setOption({
-      tooltip: {position: 'top'},
-      grid: {height: '80%', top: '5%', bottom: '15%'},
-      xAxis: {type: 'category', data: hours, boundaryGap: true, splitLine: {show: true, lineStyle: {type: 'dashed'}}},
-      yAxis: {type: 'category', data: days, boundaryGap: true},
+    heatmapChart.setOption({
+      tooltip: { position: 'top' },
+      grid: { height: '80%', top: '5%', bottom: '15%' },
+      xAxis: { type: 'category', data: hours, boundaryGap: true, splitLine: { show: true, lineStyle: { type: 'dashed' } } },
+      yAxis: { type: 'category', data: days, boundaryGap: true },
       visualMap: {
-        min: 0, max: 10, orient: 'horizontal', left: 'center', bottom: '0',
-        inRange: {color: ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127']},
-        textStyle: {fontSize: 10}
+        min: 0, max: maxVal, orient: 'horizontal', left: 'center', bottom: '0',
+        inRange: { color: ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127'] },
+        textStyle: { fontSize: 10 }
       },
-      series: [{
-        type: 'heatmap',
-        data: res.data.data,
-        label: {show: true, fontSize: 10, color: '#333'}
-      }]
+      series: [{ type: 'heatmap', data: heatData, label: { show: true, fontSize: 10, color: '#333' } }]
     })
-    charts.push(myChart)
-  } catch (e) {
-    console.error(e)
-  }
+  } catch (e) { console.error('Heatmap error:', e) }
 }
 
-// 3. 获取博文列表
-const fetchPosts = async () => {
+const fetchPosts = async (dateRange, keyword) => {
   loading.value = true
   try {
-    const res = await request.get(`${API_BASE}/posts?page_size=10`)
+    const res = await request.get(`${API_BASE}/posts?page_size=10${buildQS(dateRange, keyword).replace('?', '&')}`)
     postList.value = res.data.data?.posts || []
-  } catch (e) {
-    console.error(e)
-  }
+  } catch (e) { console.error(e) }
   loading.value = false
 }
 
-// 工具函数
+const loadData = (dateRange, keyword) => {
+  updateLineChart(dateRange, keyword)
+  updateHeatmap()
+  fetchPosts(dateRange, keyword)
+}
+
+watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
+  loadData(newDates, newKeyword)
+}, { deep: true })
+
 const getSentimentTag = (s) => s === '积极' ? 'success' : s === '消极' ? 'danger' : 'warning'
 const getScoreColor = (score) => score > 0.6 ? '#67C23A' : score < 0.4 ? '#F56C6C' : '#E6A23C'
 
-// 打开原微博
 const openWeibo = (noteId) => {
   if (!noteId) return
   window.open(`https://m.weibo.cn/detail/${noteId}`, '_blank')
 }
 
+const handleResize = () => {
+  lineChart?.resize()
+  heatmapChart?.resize()
+}
+
 onMounted(() => {
-  initLineChart()
-  initHeatmap()
-  fetchPosts()
-  window.addEventListener('resize', () => charts.forEach(c => c.resize()))
+  lineChart = echarts.init(lineChartRef.value)
+  heatmapChart = echarts.init(heatmapRef.value)
+  loadData(globalDateRange?.value, globalSearch?.value)
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
-  charts.forEach(c => c.dispose())
+  window.removeEventListener('resize', handleResize)
+  lineChart?.dispose()
+  heatmapChart?.dispose()
 })
 </script>
 

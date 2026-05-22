@@ -33,7 +33,6 @@ async def get_topic_keywords(top_n: int = 20):
             continue
 
         try:
-            import ast
             keywords = ast.literal_eval(representation)
             if not isinstance(keywords, list):
                 continue

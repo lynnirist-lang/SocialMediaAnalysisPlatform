@@ -22,10 +22,10 @@
       <el-col :span="8">
         <div class="card-panel">
           <div class="card-info">
-            <div class="card-title">平均情感得分</div>
-            <div class="card-value">{{ summary.avg_sentiment?.toFixed(2) || '0.00' }}</div>
+            <div class="card-title">总评论数</div>
+            <div class="card-value">{{ summary.total_comments?.toLocaleString() || 0 }}</div>
           </div>
-          <el-icon class="card-icon orange"><Trophy /></el-icon>
+          <el-icon class="card-icon orange"><ChatDotRound /></el-icon>
         </div>
       </el-col>
     </el-row>
@@ -69,94 +69,64 @@ const summary = ref({})
 const trendChartRef = ref(null)
 const pieChartRef = ref(null)
 const wordCloudRef = ref(null)
-let charts = []
 
-// 监听变化并重新加载数据
-watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
-  loadData(newDates, newKeyword)
-}, { deep: true })
+let trendChart = null
+let pieChart = null
+let wordCloudChart = null
 
-const loadData = (dateRange, keyword) => {
-  const params = new URLSearchParams()
-
-  if (dateRange && dateRange.length === 2) {
-    params.append('start_date', dateRange[0].toISOString().split('T')[0])
-    params.append('end_date', dateRange[1].toISOString().split('T')[0])
+const buildQS = (dateRange, keyword) => {
+  const p = new URLSearchParams()
+  if (dateRange?.length === 2) {
+    const fmt = d => d instanceof Date ? d.toISOString().split('T')[0] : String(d)
+    p.append('start_date', fmt(dateRange[0]))
+    p.append('end_date', fmt(dateRange[1]))
   }
-
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
-
-  // 发起API请求
-  fetch(`http://localhost:8000/api/dashboard?${params}`)
-    .then(res => res.json())
-    .then(data => {
-      // 更新图表数据
-    })
+  if (keyword) p.append('keyword', keyword)
+  const s = p.toString()
+  return s ? `?${s}` : ''
 }
 
-// 获取汇总数据
-const fetchSummary = async () => {
+const fetchSummary = async (dateRange, keyword) => {
   try {
-    const res = await request.get(`${API_BASE}/summary`)
+    const res = await request.get(`${API_BASE}/summary${buildQS(dateRange, keyword)}`)
     summary.value = res.data.data
-  } catch (e) { console.error("Summary error:", e) }
+  } catch (e) { console.error('Summary error:', e) }
 }
 
-// 初始化趋势图
-const initTrendChart = async () => {
-  const myChart = echarts.init(trendChartRef.value)
-  const res = await request.get(`${API_BASE}/trend`)
-  const { dates, post_counts, user_counts } = res.data.data
-  myChart.setOption({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['博文数', '用户数'], bottom: 0 },
-    grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
-    xAxis: { type: 'category', data: dates, boundaryGap: false },
-    yAxis: { type: 'value' },
-    series: [
-      { name: '博文数', type: 'line', smooth: true, data: post_counts, areaStyle: { opacity: 0.1 } },
-      { name: '用户数', type: 'line', smooth: true, data: user_counts }
-    ]
-  })
-  charts.push(myChart)
+const updateTrendChart = async (dateRange, keyword) => {
+  if (!trendChart) return
+  try {
+    const res = await request.get(`${API_BASE}/trend${buildQS(dateRange, keyword)}`)
+    const { dates, post_counts, user_counts } = res.data.data
+    trendChart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['博文数', '用户数'], bottom: 0 },
+      grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
+      xAxis: { type: 'category', data: dates, boundaryGap: false },
+      yAxis: { type: 'value' },
+      series: [
+        { name: '博文数', type: 'line', smooth: true, data: post_counts, areaStyle: { opacity: 0.1 } },
+        { name: '用户数', type: 'line', smooth: true, data: user_counts }
+      ]
+    })
+  } catch (e) { console.error('Trend error:', e) }
 }
 
-// 初始化饼图
-// Dashboard.vue 里的 initPieChart 函数
-const initPieChart = async () => {
-  const myChart = echarts.init(pieChartRef.value)
+const updatePieChart = async () => {
+  if (!pieChart) return
   try {
     const res = await request.get('/api/sentiment/distribution')
     const data = res.data.data
-
-    myChart.setOption({
+    pieChart.setOption({
       tooltip: { trigger: 'item' },
-      legend: {
-        bottom: '0',
-        left: 'center',
-        itemGap: 10 // 图例之间的间距
-      },
+      legend: { bottom: '0', left: 'center', itemGap: 10 },
       series: [{
         type: 'pie',
-        // 关键修复 1：缩小半径，给外围文字留出足够空位 (从 70% 缩到 60%)
         radius: ['35%', '48%'],
-        center: ['50%', '45%'], // 关键修复 2：圆心上移，给底部的图例留位置
-        avoidLabelOverlap: true, // 关键修复 3：开启防重叠，防止标签挤在一起后消失
-        label: {
-          show: true,
-          position: 'outside', // 确保标签在圆圈外面
-          formatter: '{b}', // 展示名称和百分比
-          fontSize: 12,
-          color: '#666'
-        },
-        labelLine: {
-          show: true,
-          length: 15,    // 第一段引导线长度
-          length2: 10,   // 第二段引导线长度
-          smooth: true
-        },
+        center: ['50%', '45%'],
+        avoidLabelOverlap: true,
+        label: { show: true, position: 'outside', formatter: '{b}', fontSize: 12, color: '#666' },
+        labelLine: { show: true, length: 15, length2: 10, smooth: true },
         data: [
           { value: data.positive, name: '积极', itemStyle: { color: '#67C23A' } },
           { value: data.neutral, name: '中性', itemStyle: { color: '#E6A23C' } },
@@ -164,55 +134,68 @@ const initPieChart = async () => {
         ]
       }]
     })
-    charts.push(myChart)
-  } catch (e) { console.error(e) }
+  } catch (e) { console.error('Pie error:', e) }
 }
-// 初始化词云
-const initWordCloud = async () => {
-  const myChart = echarts.init(wordCloudRef.value)
-  const res = await request.get(`${API_BASE}/wordcloud`)
 
-  myChart.setOption({
-    series: [{
-      type: 'wordCloud',
-      shape: 'circle',
-      // 1. 调整字号范围，缩小最大字号，能让更多词挤进来
-      sizeRange: [12, 50],
-      // 2. 调整旋转角度，设为 0 可以让词语全部水平显示，节省空间
-      rotationRange: [0, 0],
-      // 3. 调整网格间距，减小间距可以让词语靠得更近
-      gridSize: 4,
-      // 4. 关键：允许词语超出画布边缘（部分显示），从而强制渲染更多词
-      drawOutOfBound: false,
-      layoutAnimation: true,
-      data: res.data.data,
-      textStyle: {
-        fontFamily: 'sans-serif',
-        fontWeight: 'bold',
-        color: () => `rgb(${[
-          Math.round(Math.random() * 160),
-          Math.round(Math.random() * 160),
-          Math.round(Math.random() * 160)
-        ].join(',')})`
-      },
-      emphasis: {
-        textStyle: { shadowBlur: 10, shadowColor: '#333' }
-      }
-    }]
-  })
-  charts.push(myChart)
+const updateWordCloud = async () => {
+  if (!wordCloudChart) return
+  try {
+    const res = await request.get(`${API_BASE}/wordcloud`)
+    wordCloudChart.setOption({
+      series: [{
+        type: 'wordCloud',
+        shape: 'circle',
+        sizeRange: [12, 50],
+        rotationRange: [0, 0],
+        gridSize: 4,
+        drawOutOfBound: false,
+        layoutAnimation: true,
+        data: res.data.data,
+        textStyle: {
+          fontFamily: 'sans-serif',
+          fontWeight: 'bold',
+          color: () => `rgb(${[
+            Math.round(Math.random() * 160),
+            Math.round(Math.random() * 160),
+            Math.round(Math.random() * 160)
+          ].join(',')})`
+        },
+        emphasis: { textStyle: { shadowBlur: 10, shadowColor: '#333' } }
+      }]
+    })
+  } catch (e) { console.error('WordCloud error:', e) }
+}
+
+const loadData = (dateRange, keyword) => {
+  fetchSummary(dateRange, keyword)
+  updateTrendChart(dateRange, keyword)
+  updatePieChart()
+  updateWordCloud()
+}
+
+watch([globalDateRange, globalSearch], ([newDates, newKeyword]) => {
+  loadData(newDates, newKeyword)
+}, { deep: true })
+
+const handleResize = () => {
+  trendChart?.resize()
+  pieChart?.resize()
+  wordCloudChart?.resize()
 }
 
 onMounted(() => {
-  fetchSummary()
-  initTrendChart()
-  initPieChart()
-  initWordCloud()
-  window.addEventListener('resize', () => charts.forEach(c => c.resize()))
+  trendChart = echarts.init(trendChartRef.value)
+  pieChart = echarts.init(pieChartRef.value)
+  wordCloudChart = echarts.init(wordCloudRef.value)
+  loadData(globalDateRange?.value, globalSearch?.value)
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
-  charts.forEach(c => c.dispose())
+  window.removeEventListener('resize', handleResize)
+  trendChart?.dispose()
+  pieChart?.dispose()
+  wordCloudChart?.dispose()
 })
 </script>
 

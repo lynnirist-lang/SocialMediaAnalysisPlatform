@@ -24,11 +24,22 @@ from backend.services.report_exporter import build_report_data
 
 
 FONT_NAME = 'Helvetica'  # 默认字体
-try:
-    pdfmetrics.registerFont(TTFont('SimSun', 'C:/Windows/Fonts/simsun.ttc'))
-    FONT_NAME = 'SimSun'
-except Exception as e:
-    print(f"中文字体加载失败: {e}，使用默认字体")
+_CHINESE_FONT_CANDIDATES = [
+    ('SimSun', 'C:/Windows/Fonts/simsun.ttc'),           # Windows
+    ('SimHei', 'C:/Windows/Fonts/simhei.ttf'),            # Windows 备选
+    ('NotoSansCJK', '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'),  # Linux
+    ('WenQuanYi', '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc'),              # Linux 备选
+    ('PingFang', '/System/Library/Fonts/PingFang.ttc'),   # macOS
+]
+for _font_name, _font_path in _CHINESE_FONT_CANDIDATES:
+    try:
+        pdfmetrics.registerFont(TTFont(_font_name, _font_path))
+        FONT_NAME = _font_name
+        break
+    except Exception:
+        continue
+if FONT_NAME == 'Helvetica':
+    print("[WARNING] 未找到中文字体，PDF 中文字符将显示为乱码")
 
 
 @asynccontextmanager

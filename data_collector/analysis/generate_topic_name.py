@@ -6,15 +6,25 @@ import json
 import pandas as pd
 from openai import OpenAI
 
-# 假设你的项目结构需要这些路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(project_root, ".env"), override=False)
+except ImportError:
+    pass
+
 from config.config import DynamicFileManager
 
 
 def main():
+    api_key = os.getenv('SILICONFLOW_API_KEY', '')
+    if not api_key:
+        raise EnvironmentError("未设置环境变量 SILICONFLOW_API_KEY，请先 export SILICONFLOW_API_KEY=<your_key>")
+
     client = OpenAI(
-        api_key="sk-qkydgcadmhayycfgrfwrspxcaruotovtmonauhdirikvpfsn",
+        api_key=api_key,
         base_url="https://api.siliconflow.cn/v1"
     )
 
@@ -100,11 +110,6 @@ def main():
 
     # 4. 赋值并保存
     df['topic_name'], df['category'] = zip(*results)
-
-    # 修改：不加 _fixed 后缀，根据你的要求命名
-    # 如果你想覆盖原文件，直接用 csv_path；
-    # 如果想换名字，比如 bertopic_final.csv：
-    new_output_path = csv_path.replace('.csv', '_named.csv')
 
     df.to_csv(csv_path, index=False, encoding='utf-8-sig')
     print(f"处理完成！结果已更新: {csv_path}")
