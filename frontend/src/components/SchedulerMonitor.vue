@@ -245,7 +245,8 @@ async function handleTrigger() {
   triggering.value = true
   try {
     const res = await request.post('/api/scheduler/trigger')
-    ElMessage.success(res.data?.message || '已触发')
+    ElMessage.success(res.data?.message || '已开始执行')
+    setTimeout(fetchStatus, 2000)
   } catch (e) {
     ElMessage.error('触发失败')
   } finally {

@@ -178,10 +178,11 @@ async def get_role_distribution():
 
 def _compute_extra_user_fields(df: pd.DataFrame, data_loader) -> pd.DataFrame:
     """计算活跃度、综合影响力得分、情感倾向、兴趣主题分布"""
-    # 活跃度 0-100
+    # 活跃度 0-100（相对最大值归一化，避免 min-max 把最低行为用户归零）
     if 'total_actions' in df.columns:
-        act_norm = normalize_series(df['total_actions'].fillna(0))
-        df['activity_score'] = (act_norm * 100).round(1)
+        s = df['total_actions'].fillna(0)
+        max_val = s.max()
+        df['activity_score'] = ((s / max_val * 100).round(1) if max_val > 0 else 0.0)
     else:
         df['activity_score'] = 0.0
 

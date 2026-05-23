@@ -564,6 +564,28 @@ class DataCollectorScheduler:
         else:
             print(f"   ⚠️ 用户画像脚本不存在: {user_char_script}")
 
+        # 6.3 动态主题建模（DTM）
+        print("\n🌊 5.3 动态主题演化建模...")
+        dtm_script = project_root / "data_collector" / "analysis" / "run_dynamic_topic.py"
+        if dtm_script.exists():
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(dtm_script)],
+                    cwd=str(project_root),
+                    timeout=1800,
+                    env=env,
+                )
+                if result.returncode == 0:
+                    print("   [OK] DTM 完成")
+                else:
+                    print(f"   [FAIL] DTM 失败 (退出码: {result.returncode})")
+            except subprocess.TimeoutExpired:
+                print("   [FAIL] DTM 超时 (30min)")
+            except Exception as e:
+                print(f"   [WARN] DTM 执行异常: {e}")
+        else:
+            print(f"   [WARN] DTM 脚本不存在: {dtm_script}")
+
         self._sync_to_database_and_refresh_cache()
 
     def _sync_to_database_and_refresh_cache(self):

@@ -1,6 +1,8 @@
 import ast
+import json
 import math
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 import pandas as pd
@@ -9,6 +11,7 @@ from backend.services.data_loader import DataLoader
 from functools import lru_cache
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DYNAMIC_TOPICS_FILE = Path(project_root) / "words" / "analysis_data" / "dynamic_topics.json"
 
 router = APIRouter()
 def get_data_loader():
@@ -243,6 +246,70 @@ async def get_topic_evolution(interval: str = "week", top_n: int = 6):
         import traceback
         print(f"[ERROR] /api/topic/evolution: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dynamic-evolution", response_model=Response)
+async def get_dynamic_topic_evolution():
+    """
+    读取 DTM 输出，返回 Sankey 节点/链接数据和时间趋势数据。
+
+    Sankey 节点名格式："{period}::{chain_name}_{chain_id}"
+    前端用 "::" 分割后取第二段显示，保证节点名全局唯一。
+    """
+    if not _DYNAMIC_TOPICS_FILE.exists():
+        return Response(
+            code=404,
+            message="DTM 结果文件不存在，请先运行 data_collector/analysis/run_dynamic_topic.py",
+            data=None,
+        )
+    try:
+        raw = json.loads(_DYNAMIC_TOPICS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取 DTM 结果失败: {e}")
+
+    periods: list = raw.get("periods", [])
+    chains: list = raw.get("chains", [])
+
+    # ── Sankey ───────────────────────────────────────────────────────────────
+    sankey_nodes = []
+    sankey_links = []
+    node_set = set()
+
+    def _node_name(period, chain):
+        return f"{period}::{chain['name']}_{chain['chain_id']}"
+
+    for chain in chains:
+        sorted_periods = sorted(chain["periods"].keys())
+        for i, p in enumerate(sorted_periods):
+            nname = _node_name(p, chain)
+            if nname not in node_set:
+                sankey_nodes.append({"name": nname})
+                node_set.add(nname)
+            if i > 0:
+                prev_p = sorted_periods[i - 1]
+                sankey_links.append({
+                    "source": _node_name(prev_p, chain),
+                    "target": nname,
+                    "value": chain["periods"][p]["doc_count"],
+                    "keywords": chain["periods"][p]["keywords"][:5],
+                })
+
+    # ── Trend（折线图）───────────────────────────────────────────────────────
+    trend_series = []
+    for chain in chains:
+        data = [chain["periods"].get(p, {}).get("doc_count", 0) for p in periods]
+        trend_series.append({
+            "name": chain["name"],
+            "data": data,
+            "keywords": chain["keywords"],
+        })
+
+    return Response(code=200, data={
+        "generated_at": raw.get("generated_at"),
+        "periods": periods,
+        "sankey": {"nodes": sankey_nodes, "links": sankey_links},
+        "trend": {"series": trend_series},
+    })
 
 
 @router.get("/bar", response_model=Response)
