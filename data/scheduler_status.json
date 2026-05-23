@@ -1,18 +1,23 @@
 {
   "is_running": false,
-  "pid": 26852,
+  "pid": 29540,
   "last_run": {
-    "start_time": "2026-05-23T17:30:09",
-    "end_time": "2026-05-23T17:30:09",
-    "status": "failed",
-    "error": "爬虫未成功：爬虫退出码 2（耗时 0s）",
+    "start_time": "2026-05-24T01:11:02",
+    "end_time": "2026-05-24T01:11:43",
+    "status": "success",
+    "error": null,
     "crawler": {
-      "status": "failed",
-      "returncode": 2,
-      "duration_s": 0.1,
-      "message": "爬虫退出码 2（耗时 0s）"
+      "status": "skipped",
+      "returncode": null,
+      "duration_s": 0.0,
+      "message": "CRAWLER_COMMAND 未配置，跳过爬虫"
     },
-    "stats": {}
+    "stats": {
+      "posts_raw": 400,
+      "comments_raw": 920,
+      "posts_cleaned": 380,
+      "comments_cleaned": 776
+    }
   },
   "next_scheduled": [],
   "history": [
@@ -28,6 +33,24 @@
         "message": "爬虫退出码 2（耗时 0s）"
       },
       "stats": {}
+    },
+    {
+      "start_time": "2026-05-24T01:11:02",
+      "end_time": "2026-05-24T01:11:43",
+      "status": "success",
+      "error": null,
+      "crawler": {
+        "status": "skipped",
+        "returncode": null,
+        "duration_s": 0.0,
+        "message": "CRAWLER_COMMAND 未配置，跳过爬虫"
+      },
+      "stats": {
+        "posts_raw": 400,
+        "comments_raw": 920,
+        "posts_cleaned": 380,
+        "comments_cleaned": 776
+      }
     }
   ]
 }

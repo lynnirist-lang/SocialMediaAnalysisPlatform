@@ -80,6 +80,8 @@ async def get_scheduler_status():
     if status.get("is_running") and pid is not None:
         if not _is_pid_alive(pid):
             status["is_running"] = False
+            status["pid"] = None
+            _write_json(STATUS_FILE, status)
 
     # 补全下次计划（调度器进程不在时也能正常显示）
     if not status.get("next_scheduled"):
@@ -145,7 +147,7 @@ async def trigger_manual():
             raise HTTPException(status_code=409, detail="已有手动触发任务正在执行，请稍后再试")
         _trigger_running = True
 
-    t = threading.Thread(target=_run_collect_in_background, daemon=True)
+    t = threading.Thread(target=_run_collect_in_background)
     t.start()
     return {"status": "ok", "message": "已开始执行，请关注任务状态变化"}
 
