@@ -14,8 +14,8 @@ class WeiboHotSearchScheduler:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
-        self.job_id = "weibo_hot_search_daily"
-        self.project_root = Path(__file__).parent.parent.parent
+        self.job_id = "weibo_hot_search"
+        self.project_root = Path(__file__).parent.parent.parent  # MediaCrawler root (api/services/ → api/ → root)
 
     async def _fetch_hot_search_and_crawl(self):
         """执行完整的微博热搜爬取流程"""
@@ -23,7 +23,7 @@ class WeiboHotSearchScheduler:
             utils.logger.info("[Scheduler] ===== 开始执行微博热搜定时任务 =====")
 
             # Step 1: 获取热搜关键词并保存到文件
-            utils.logger.info("[Scheduler] Step 1/3: 获取微博热搜关键词...")
+            utils.logger.info("[Scheduler] Step 1/4: 获取微博热搜关键词...")
             from tools.get_weibo_hot_search import WeiboHotSearchCrawler
             from datetime import datetime
             import glob
@@ -54,7 +54,7 @@ class WeiboHotSearchScheduler:
 
             utils.logger.info(f"[Scheduler] ✓ 获取到 {len(keywords)} 个热搜关键词")
             # Step 2: 运行主爬虫（自动读取热搜关键词文件）
-            utils.logger.info("[Scheduler] Step 2/3: 爬取热搜帖子和评论...")
+            utils.logger.info("[Scheduler] Step 2/4: 爬取热搜帖子和评论...")
             import config
             config.KEYWORDS_FILE = "data/words/hot_words"
             config.PLATFORM = "wb"
@@ -67,7 +67,6 @@ class WeiboHotSearchScheduler:
 
             # 强制关闭所有 Chrome 进程，释放 CDP 端口
             utils.logger.info("[Scheduler] 强制关闭浏览器进程...")
-            import subprocess
             try:
                 # Windows: 关闭所有 chrome.exe 进程
                 subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"],
@@ -78,7 +77,7 @@ class WeiboHotSearchScheduler:
                 utils.logger.warning(f"[Scheduler] 清理浏览器进程失败: {e}")
 
             # Step 3: 获取发帖人信息（复用已登录状态）
-            utils.logger.info("[Scheduler] Step 3/3: 获取发帖人信息...")
+            utils.logger.info("[Scheduler] Step 3/4: 获取发帖人信息...")
             from media_platform.weibo.fetch_poster_info import fetch_and_save_creator_info
 
             await fetch_and_save_creator_info()
@@ -87,7 +86,6 @@ class WeiboHotSearchScheduler:
 
             # 强制关闭所有 Chrome 进程，释放 CDP 端口
             utils.logger.info("[Scheduler] 强制关闭浏览器进程...")
-            import subprocess
             try:
                 # Windows: 关闭所有 chrome.exe 进程
                 subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"],
@@ -155,30 +153,33 @@ class WeiboHotSearchScheduler:
             utils.logger.error(f"[Scheduler] ✗ {description} 失败: {e}")
             raise
 
-    def start(self, hour: int = 12, minute: int = 0):
+    def start(self, hours: list = None):
         """启动调度器
 
         Args:
-            hour: 执行小时 (默认12点)
-            minute: 执行分钟 (默认0分)
+            hours: 执行小时列表，默认 [12, 21]（每天 12:00 和 21:00）
         """
         if self.is_running:
             utils.logger.warning("[Scheduler] 调度器已在运行")
             return
 
-        # 添加每天定时任务
-        self.scheduler.add_job(
-            self._fetch_hot_search_and_crawl,
-            trigger=CronTrigger(hour=hour, minute=minute),
-            id=self.job_id,
-            name='微博热搜每日爬取',
-            misfire_grace_time=3600,  # 错过1小时内仍可执行
-            replace_existing=True
-        )
+        if hours is None:
+            hours = [12, 21]
+
+        for hour in hours:
+            self.scheduler.add_job(
+                self._fetch_hot_search_and_crawl,
+                trigger=CronTrigger(hour=hour, minute=0),
+                id=f"{self.job_id}_{hour:02d}",
+                name=f'微博热搜每日爬取 {hour:02d}:00',
+                misfire_grace_time=3600,  # 错过1小时内仍可执行
+                replace_existing=True
+            )
 
         self.scheduler.start()
         self.is_running = True
-        utils.logger.info(f"[Scheduler] 调度器已启动: 每天 {hour:02d}:{minute:02d} 执行")
+        times_str = ', '.join(f'{h:02d}:00' for h in hours)
+        utils.logger.info(f"[Scheduler] 调度器已启动: 每天 {times_str} 执行")
 
     def stop(self):
         """停止调度器"""
@@ -190,31 +191,42 @@ class WeiboHotSearchScheduler:
         self.is_running = False
         utils.logger.info("[Scheduler] 调度器已停止")
 
+    def _get_all_jobs(self):
+        """返回所有已注册的爬取任务"""
+        return [j for j in self.scheduler.get_jobs() if j.id.startswith(self.job_id)]
+
     def enable_job(self):
-        """启用定时任务"""
-        if self.scheduler.get_job(self.job_id):
-            self.scheduler.resume_job(self.job_id)
+        """启用所有定时任务"""
+        jobs = self._get_all_jobs()
+        for job in jobs:
+            self.scheduler.resume_job(job.id)
+        if jobs:
             utils.logger.info("[Scheduler] 定时任务已启用")
             return True
         return False
 
     def disable_job(self):
-        """禁用定时任务"""
-        if self.scheduler.get_job(self.job_id):
-            self.scheduler.pause_job(self.job_id)
+        """禁用所有定时任务"""
+        jobs = self._get_all_jobs()
+        for job in jobs:
+            self.scheduler.pause_job(job.id)
+        if jobs:
             utils.logger.info("[Scheduler] 定时任务已禁用")
             return True
         return False
 
     def get_status(self) -> Dict:
         """获取调度器状态"""
-        job = self.scheduler.get_job(self.job_id)
+        jobs = self._get_all_jobs()
+        next_times = sorted(
+            [str(j.next_run_time) for j in jobs if j.next_run_time]
+        )
         return {
             "is_running": self.is_running,
-            "job_exists": job is not None,
-            "job_paused": job.next_run_time is None if job else False,
-            "next_run_time": str(job.next_run_time) if job and job.next_run_time else None,
-            "schedule": "每天 12:00"
+            "job_exists": len(jobs) > 0,
+            "job_paused": all(j.next_run_time is None for j in jobs) if jobs else False,
+            "next_run_times": next_times,
+            "schedule": "每天 12:00 / 21:00",
         }
 
 

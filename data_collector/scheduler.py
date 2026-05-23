@@ -4,6 +4,7 @@
 """
 import glob
 import json
+import shlex
 import sys
 import os
 import time
@@ -118,7 +119,7 @@ class DataCollectorScheduler:
                     "duration_s": 0.0, "message": "CRAWLER_COMMAND 未配置，跳过爬虫"}
 
         work_dir = str(CRAWLER_WORK_DIR) if CRAWLER_WORK_DIR and CRAWLER_WORK_DIR.exists() else None
-        cmd_parts = CRAWLER_COMMAND.split()
+        cmd_parts = shlex.split(CRAWLER_COMMAND, posix=False)
 
         print(f"\n{'─' * 50}")
         print(f"🕷️  启动爬虫: {CRAWLER_COMMAND}")
