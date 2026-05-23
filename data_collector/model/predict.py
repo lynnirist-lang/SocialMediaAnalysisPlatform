@@ -1,10 +1,14 @@
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 import torch
 import pandas as pd
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import json
 import os
 from pathlib import Path
-import sys
 import re
 from datetime import datetime
 from config.config import FINE_TUNED_MODEL_DIR

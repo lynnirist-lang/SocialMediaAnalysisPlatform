@@ -7,6 +7,9 @@ import json
 import shlex
 import sys
 import os
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 import time
 import re
 from pathlib import Path

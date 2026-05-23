@@ -1,0 +1,33 @@
+{
+  "is_running": false,
+  "pid": 26852,
+  "last_run": {
+    "start_time": "2026-05-23T17:30:09",
+    "end_time": "2026-05-23T17:30:09",
+    "status": "failed",
+    "error": "爬虫未成功：爬虫退出码 2（耗时 0s）",
+    "crawler": {
+      "status": "failed",
+      "returncode": 2,
+      "duration_s": 0.1,
+      "message": "爬虫退出码 2（耗时 0s）"
+    },
+    "stats": {}
+  },
+  "next_scheduled": [],
+  "history": [
+    {
+      "start_time": "2026-05-23T17:30:09",
+      "end_time": "2026-05-23T17:30:09",
+      "status": "failed",
+      "error": "爬虫未成功：爬虫退出码 2（耗时 0s）",
+      "crawler": {
+        "status": "failed",
+        "returncode": 2,
+        "duration_s": 0.1,
+        "message": "爬虫退出码 2（耗时 0s）"
+      },
+      "stats": {}
+    }
+  ]
+}

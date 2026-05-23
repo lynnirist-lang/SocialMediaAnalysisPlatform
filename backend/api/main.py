@@ -1,6 +1,10 @@
 import io
 import re
+import sys
 from contextlib import asynccontextmanager
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 from datetime import datetime
 from xml.sax.saxutils import escape as xml_escape
 
@@ -60,11 +64,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 data_loader = DataLoader()
-# 跨域配置
+# 跨域配置（开发环境：允许所有 localhost 端口）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # 添加 5174
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -330,4 +334,4 @@ async def export_report(request: dict):
 
 
 if __name__ == "__main__":
-    uvicorn.run("backend.api.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.api.main:app", host="0.0.0.0", port=8080, reload=True)

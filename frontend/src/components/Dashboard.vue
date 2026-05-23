@@ -2,7 +2,7 @@
   <div class="dashboard-container">
     <el-row :gutter="20">
       <el-col :span="8">
-        <div class="card-panel">
+        <div class="card-panel blue">
           <div class="card-info">
             <div class="card-title">总博文数</div>
             <div class="card-value">{{ summary.total_posts?.toLocaleString() || 0 }}</div>
@@ -11,7 +11,7 @@
         </div>
       </el-col>
       <el-col :span="8">
-        <div class="card-panel">
+        <div class="card-panel green">
           <div class="card-info">
             <div class="card-title">参与用户数</div>
             <div class="card-value">{{ summary.total_users?.toLocaleString() || 0 }}</div>
@@ -20,7 +20,7 @@
         </div>
       </el-col>
       <el-col :span="8">
-        <div class="card-panel">
+        <div class="card-panel orange">
           <div class="card-info">
             <div class="card-title">总评论数</div>
             <div class="card-value">{{ summary.total_comments?.toLocaleString() || 0 }}</div>
@@ -105,8 +105,8 @@ const updateTrendChart = async (dateRange, keyword) => {
       xAxis: { type: 'category', data: dates, boundaryGap: false },
       yAxis: { type: 'value' },
       series: [
-        { name: '博文数', type: 'line', smooth: true, data: post_counts, areaStyle: { opacity: 0.1 } },
-        { name: '用户数', type: 'line', smooth: true, data: user_counts }
+        { name: '博文数', type: 'line', smooth: true, data: post_counts, lineStyle: { color: '#3b7dd8', width: 2 }, itemStyle: { color: '#3b7dd8' }, areaStyle: { opacity: 0.08, color: '#3b7dd8' } },
+        { name: '用户数', type: 'line', smooth: true, data: user_counts, lineStyle: { color: '#10b981', width: 2 }, itemStyle: { color: '#10b981' } }
       ]
     })
   } catch (e) { console.error('Trend error:', e) }
@@ -154,11 +154,10 @@ const updateWordCloud = async () => {
         textStyle: {
           fontFamily: 'sans-serif',
           fontWeight: 'bold',
-          color: () => `rgb(${[
-            Math.round(Math.random() * 160),
-            Math.round(Math.random() * 160),
-            Math.round(Math.random() * 160)
-          ].join(',')})`
+          color: () => {
+            const palette = ['#3b7dd8', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#1a2a4a']
+            return palette[Math.floor(Math.random() * palette.length)]
+          }
         },
         emphasis: { textStyle: { shadowBlur: 10, shadowColor: '#333' } }
       }]
@@ -200,40 +199,40 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.dashboard-container {
-  padding: 10px; /* 稍微缩小边距 */
-  background-color: #f5f7fa;
-}
+.dashboard-container { padding: 4px; }
 
 .card-panel {
   background: #fff;
-  padding: 25px;
-  border-radius: 12px;
+  padding: 22px 24px;
+  border-radius: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 8px rgba(0, 30, 70, 0.08);
+  border-top: 4px solid transparent;
 }
 
-.card-title { font-size: 14px; color: #909399; }
-.card-value { font-size: 26px; font-weight: bold; margin-top: 8px; }
-.card-icon { font-size: 48px; opacity: 0.2; }
+.card-title { font-size: 13px; color: #6b7a8d; margin-bottom: 6px; }
+.card-value { font-size: 28px; font-weight: 700; color: #1a2a4a; }
+.card-icon { font-size: 46px; opacity: 0.12; }
 
 .chart-wrapper {
   background: #fff;
   padding: 20px;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-radius: 10px;
+  box-shadow: 0 1px 8px rgba(0, 30, 70, 0.08);
 }
 
 .chart-header {
-  font-weight: bold;
-  margin-bottom: 20px;
-  border-left: 4px solid #409EFF;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a2a4a;
+  margin-bottom: 18px;
+  border-left: 4px solid #3b7dd8;
   padding-left: 10px;
 }
 
-.blue { color: #409EFF; }
-.green { color: #67C23A; }
-.orange { color: #E6A23C; }
+.blue { color: #3b7dd8; border-top-color: #3b7dd8 !important; }
+.green { color: #10b981; border-top-color: #10b981 !important; }
+.orange { color: #f59e0b; border-top-color: #f59e0b !important; }
 </style>

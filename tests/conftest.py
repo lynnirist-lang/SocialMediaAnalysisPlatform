@@ -19,7 +19,7 @@ def client():
 @pytest.fixture(scope="session")
 def base_url():
     """基础URL配置"""
-    return "http://localhost:8000"
+    return "http://localhost:8080"
 
 
 # 待更正

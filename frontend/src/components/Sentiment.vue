@@ -107,9 +107,9 @@ const updateLineChart = async (dateRange, keyword) => {
         type: 'line',
         smooth: true,
         data: scores,
-        areaStyle: { opacity: 0.2, color: '#409EFF' },
-        lineStyle: { color: '#409EFF', width: 2 },
-        itemStyle: { color: '#409EFF' }
+        areaStyle: { opacity: 0.1, color: '#8b5cf6' },
+        lineStyle: { color: '#8b5cf6', width: 2 },
+        itemStyle: { color: '#8b5cf6' }
       }]
     })
   } catch (e) { console.error('LineChart error:', e) }
@@ -186,22 +186,22 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.sentiment-container {
-  padding: 10px;
-}
+.sentiment-container { padding: 4px; }
 
 .chart-card {
   background: #fff;
   padding: 20px;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-radius: 10px;
+  box-shadow: 0 1px 8px rgba(0, 30, 70, 0.08);
   height: 100%;
 }
 
 .card-header {
-  font-weight: bold;
-  margin-bottom: 15px;
-  border-left: 4px solid #409EFF;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a2a4a;
+  margin-bottom: 16px;
+  border-left: 4px solid #8b5cf6;
   padding-left: 10px;
 }
 </style>

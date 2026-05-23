@@ -53,10 +53,10 @@
             v-model="globalSearch"
             placeholder="话题搜索..."
             prefix-icon="Search"
-            style="width: 180px; margin-left: 12px;"
+            style="width: 180px;"
           />
-          <el-button type="primary" style="margin-left: 12px" @click="handleExportReport">导出报告</el-button>
-          <el-button style="margin-left: 8px" @click="handleLogout">退出登录</el-button>
+          <el-button type="primary" @click="handleExportReport">导出报告</el-button>
+          <el-button @click="handleLogout">退出登录</el-button>
         </div>
       </el-header>
 
@@ -182,9 +182,34 @@ const handleExportReport = async () => {
 </script>
 
 <style scoped>
-.app-container { height: 100vh; background-color: #f0f2f5; }
-.sidebar { background-color: #2c3e50; transition: width 0.3s; }
-.logo { height: 60px; line-height: 60px; text-align: center; color: #409EFF; font-weight: bold; font-size: 18px; background: #1e2b37; }
+.app-container { height: 100vh; background-color: #f0f4f8; }
+
+.sidebar { background-color: #1a2a4a; transition: width 0.3s; }
+
+.logo {
+  height: 64px;
+  line-height: 64px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: #fff;
+  background: linear-gradient(135deg, #1a2a4a 0%, #2d4a7a 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+:deep(.el-menu) { border-right: none; }
+:deep(.el-menu-item) { height: 48px; line-height: 48px; color: #a0b8d0 !important; }
+:deep(.el-menu-item .el-icon) { color: #a0b8d0; }
+:deep(.el-menu-item:hover) { background-color: rgba(255,255,255,0.06) !important; color: #fff !important; }
+:deep(.el-menu-item:hover .el-icon) { color: #fff; }
+:deep(.el-menu-item.is-active) {
+  background-color: rgba(59, 125, 216, 0.18) !important;
+  color: #6ab3ff !important;
+  border-right: 3px solid #4a9eff;
+}
+:deep(.el-menu-item.is-active .el-icon) { color: #6ab3ff; }
+
 .header {
   background: #fff;
   display: flex;
@@ -192,13 +217,17 @@ const handleExportReport = async () => {
   align-items: center;
   padding: 0 24px;
   height: 64px;
-  box-shadow: 0 1px 4px rgba(0,21,41,.08);
+  box-shadow: 0 2px 8px rgba(0, 30, 70, 0.08);
+  border-bottom: 1px solid #e8edf3;
 }
-.page-title { font-size: 18px; font-weight: 600; color: #333; }
-.header-right { display: flex; align-items: center; }
-.user-label { margin-right: 12px; color: #606266; font-size: 14px; }
-.main-content { padding: 20px; }
-.fade-transform-enter-active, .fade-transform-leave-active { transition: all .3s; }
-.fade-transform-enter-from { opacity: 0; transform: translateX(-10px); }
-.fade-transform-leave-to { opacity: 0; transform: translateX(10px); }
+
+.page-title { font-size: 17px; font-weight: 700; color: #1a2a4a; letter-spacing: 0.5px; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.user-label { color: #6b7a8d; font-size: 13px; }
+
+.main-content { padding: 22px; background: #f0f4f8; }
+
+.fade-transform-enter-active, .fade-transform-leave-active { transition: all .25s ease; }
+.fade-transform-enter-from { opacity: 0; transform: translateX(-8px); }
+.fade-transform-leave-to { opacity: 0; transform: translateX(8px); }
 </style>

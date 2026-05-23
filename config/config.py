@@ -74,7 +74,7 @@ MEDIA_CRAWLER_DATA_DIR = Path(
 CRAWLER_WORK_DIR = Path(os.getenv("CRAWLER_WORK_DIR", ""))
 CRAWLER_COMMAND = os.getenv("CRAWLER_COMMAND", "")
 CRAWLER_TIMEOUT = int(os.getenv("CRAWLER_TIMEOUT", "3600"))
-CRAWLER_SKIP_ON_FAILURE = os.getenv("CRAWLER_SKIP_ON_FAILURE", "true").lower() in ("1", "true", "yes")
+CRAWLER_SKIP_ON_FAILURE = os.getenv("CRAWLER_SKIP_ON_FAILURE", "false").lower() in ("1", "true", "yes")
 
 # ==================== SQLite 数据库 ====================
 DATA_DIR = PROJECT_ROOT / "data"
@@ -99,6 +99,7 @@ def setup_environment():
     """设置环境变量"""
     os.environ['TRANSFORMERS_CACHE'] = str(TRANSFORMERS_CACHE_DIR)
     os.environ['HF_HOME'] = str(HF_HOME_DIR)
+    os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 
 
 # ==================== 辅助函数 ====================

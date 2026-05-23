@@ -12,6 +12,34 @@ from functools import lru_cache
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DYNAMIC_TOPICS_FILE = Path(project_root) / "words" / "analysis_data" / "dynamic_topics.json"
+_STOPWORDS_FILE = Path(project_root) / "words" / "stopwords_hit.txt"
+
+# 加载停用词，用于修正 DTM 链名
+_DTM_STOPWORDS: set = set()
+try:
+    with open(_STOPWORDS_FILE, encoding="utf-8") as _f:
+        _DTM_STOPWORDS = {line.strip() for line in _f if line.strip()}
+except Exception:
+    pass
+
+
+def _select_chain_name(chain: dict) -> str | None:
+    """
+    从链的关键词中选出第一个有意义的词作为链名。
+    有意义 = 长度 > 1 且不在停用词表 且不是纯数字。
+    返回 None 表示该链全为虚词噪声，应当过滤掉。
+    """
+    # 汇总所有关键词：全局 + 各时期
+    all_kws: list[str] = list(chain.get("keywords", []))
+    for pd_data in chain.get("periods", {}).values():
+        all_kws.extend(pd_data.get("keywords", []))
+
+    for kw in all_kws:
+        kw = str(kw).strip()
+        if len(kw) > 1 and not kw.isdigit() and kw not in _DTM_STOPWORDS:
+            return kw
+    return None  # 纯噪声链
+
 
 router = APIRouter()
 def get_data_loader():
@@ -269,6 +297,17 @@ async def get_dynamic_topic_evolution():
 
     periods: list = raw.get("periods", [])
     chains: list = raw.get("chains", [])
+
+    # ── 链名后处理：修正虚词名、过滤纯噪声链 ────────────────────────────────
+    cleaned_chains = []
+    for chain in chains:
+        best = _select_chain_name(chain)
+        if best is None:
+            continue  # 全虚词链，直接丢弃
+        if chain["name"] != best:
+            chain = dict(chain, name=best)  # 浅拷贝，不改原 JSON
+        cleaned_chains.append(chain)
+    chains = cleaned_chains
 
     # ── Sankey ───────────────────────────────────────────────────────────────
     sankey_nodes = []

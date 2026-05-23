@@ -13,6 +13,9 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 # Add project root to path so backend/config imports resolve correctly
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))

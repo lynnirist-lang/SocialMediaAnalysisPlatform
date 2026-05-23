@@ -12,6 +12,9 @@ import sys
 import subprocess
 import argparse
 
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 
 def run_tests(args):
     """运行pytest测试"""

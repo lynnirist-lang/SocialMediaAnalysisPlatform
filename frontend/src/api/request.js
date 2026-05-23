@@ -2,7 +2,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 const request = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: '',   // 同源请求，由 Vite proxy 转发到 http://localhost:8080
   timeout: 60000,
 })
 
