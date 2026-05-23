@@ -176,6 +176,70 @@ async def get_role_distribution():
     return Response(code=200, data=role_counts.to_dict('records'))
 
 
+def _compute_extra_user_fields(df: pd.DataFrame, data_loader) -> pd.DataFrame:
+    """计算活跃度、综合影响力得分、情感倾向、兴趣主题分布"""
+    # 活跃度 0-100
+    if 'total_actions' in df.columns:
+        act_norm = normalize_series(df['total_actions'].fillna(0))
+        df['activity_score'] = (act_norm * 100).round(1)
+    else:
+        df['activity_score'] = 0.0
+
+    # 综合影响力得分 0-1
+    fans_n = normalize_series(df['fans_count'].fillna(0)) if 'fans_count' in df.columns else pd.Series([0.5] * len(df), index=df.index)
+    pr_n = normalize_series(df['pagerank_score'].fillna(0)) if 'pagerank_score' in df.columns else pd.Series([0.5] * len(df), index=df.index)
+    burst_n = normalize_series(df['burst_power'].fillna(0)) if 'burst_power' in df.columns else pd.Series([0.5] * len(df), index=df.index)
+    orig_n = normalize_series(df['originality_score'].fillna(0.5)) if 'originality_score' in df.columns else pd.Series([0.5] * len(df), index=df.index)
+    df['influence_score'] = (0.3 * fans_n + 0.3 * pr_n + 0.25 * burst_n + 0.15 * orig_n).round(3)
+
+    # 情感倾向（基于 sentiment_intensity：>0.1 积极，<-0.1 消极，否则中性）
+    def _sent_label(val):
+        if pd.isna(val):
+            return '中性'
+        v = float(val)
+        if v > 0.1:
+            return '积极'
+        if v < -0.1:
+            return '消极'
+        return '中性'
+
+    if 'sentiment_intensity' in df.columns:
+        df['sentiment_tendency'] = df['sentiment_intensity'].apply(_sent_label)
+    else:
+        df['sentiment_tendency'] = '中性'
+
+    # 兴趣主题分布（关联帖子数据，取每位用户发帖最多的前2个话题）
+    top_topics_map: dict = {}
+    try:
+        df_posts = data_loader.load_posts()
+        if not df_posts.empty and 'Topic' in df_posts.columns and 'user_id' in df_posts.columns:
+            df_topics_meta = data_loader.load_bertopic_results()
+            topic_name_map: dict = {}
+            if not df_topics_meta.empty and 'Topic' in df_topics_meta.columns:
+                for _, tr in df_topics_meta.iterrows():
+                    tid = tr.get('Topic')
+                    name = tr.get('topic_name', f'话题{tid}')
+                    topic_name_map[int(tid)] = str(name)
+
+            df_valid = df_posts[df_posts['Topic'] != -1].copy()
+            df_valid['user_id'] = df_valid['user_id'].astype(str).str.strip()
+            top_topics_map = (
+                df_valid.groupby('user_id')['Topic']
+                .apply(lambda x: [
+                    topic_name_map.get(int(t), f'话题{t}')
+                    for t in x.value_counts().head(2).index
+                ])
+                .to_dict()
+            )
+    except Exception as e:
+        print(f"[WARNING] 计算兴趣主题失败: {e}")
+
+    df['top_topics'] = df['user_id'].apply(
+        lambda uid: top_topics_map.get(str(uid), [])
+    )
+    return df
+
+
 @router.get("/list", response_model=Response)
 async def get_user_list(page_size: int = 10, page: int = 1):
     data_loader = get_data_loader()
@@ -183,18 +247,24 @@ async def get_user_list(page_size: int = 10, page: int = 1):
     if df.empty:
         return Response(code=200, data={"users": [], "total": 0})
 
-    # 添加角色映射（多维度综合评分）
     if 'user_role' not in df.columns:
         df['user_role'] = df.apply(lambda row: assign_user_role(df, row), axis=1)
 
-    # 分页
+    df = _compute_extra_user_fields(df, data_loader)
+
     total = len(df)
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
-    df_page = df.iloc[start_idx:end_idx]
+    df_page = df.iloc[start_idx:end_idx].copy()
+
+    # 将 NaN 替换为 None 避免 JSON 序列化问题
+    records = []
+    for rec in df_page.to_dict('records'):
+        clean = {k: (None if isinstance(v, float) and np.isnan(v) else v) for k, v in rec.items()}
+        records.append(clean)
 
     return Response(code=200, data={
-        "users": df_page.to_dict('records'),
+        "users": records,
         "total": total,
         "page": page,
         "page_size": page_size

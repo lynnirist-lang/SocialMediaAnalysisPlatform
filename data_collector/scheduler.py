@@ -3,6 +3,7 @@
 从 MediaCrawler 获取最新数据并执行完整处理流程
 """
 import glob
+import json
 import sys
 import os
 import time
@@ -24,7 +25,12 @@ from config.config import (
     STOPWORDS_PATH,
     USER_DICT_PATH,
     GeneratedFiles,
-    DynamicFileManager, SENTIMENT_DATA_DIR
+    DynamicFileManager,
+    SENTIMENT_DATA_DIR,
+    CRAWLER_WORK_DIR,
+    CRAWLER_COMMAND,
+    CRAWLER_TIMEOUT,
+    CRAWLER_SKIP_ON_FAILURE,
 )
 from data_collector.cleaners.weibo_preprocessor import WeiboPreprocessor
 from data_collector.cleaners.weibo_data_loader import WeiboDataLoader
@@ -33,12 +39,145 @@ from data_collector.cleaners.weibo_data_loader import WeiboDataLoader
 class DataCollectorScheduler:
     """数据采集调度器"""
 
+    STATUS_FILE = Path(__file__).parent.parent / "data" / "scheduler_status.json"
+    CONTROL_FILE = Path(__file__).parent.parent / "data" / "scheduler_control.json"
+
     def __init__(self):
         self.preprocessor = WeiboPreprocessor(
             stopwords_file_path=str(STOPWORDS_PATH),
             user_dict_path=str(USER_DICT_PATH)
         )
         self.data_loader = WeiboDataLoader(data_dir=str(MEDIA_CRAWLER_DATA_DIR))
+
+    # ------------------------------------------------------------------
+    # Status / control file helpers
+    # ------------------------------------------------------------------
+
+    def _write_status(self, is_running: bool, last_run: dict = None) -> None:
+        """Write scheduler status to JSON file."""
+        try:
+            # Compute next scheduled times from registered jobs
+            next_times = []
+            for job in schedule.jobs:
+                if "pipeline" in (job.tags or set()):
+                    if job.next_run:
+                        next_times.append(job.next_run.isoformat(timespec="seconds"))
+            next_times.sort()
+
+            # Load existing history
+            history = []
+            if self.STATUS_FILE.exists():
+                try:
+                    existing = json.loads(self.STATUS_FILE.read_text(encoding="utf-8"))
+                    history = existing.get("history", [])
+                except Exception:
+                    history = []
+
+            # Append last_run to history (keep last 10)
+            if last_run is not None:
+                history.append(last_run)
+                history = history[-10:]
+
+            status = {
+                "is_running": is_running,
+                "pid": os.getpid(),
+                "last_run": last_run,
+                "next_scheduled": next_times,
+                "history": history,
+            }
+
+            self.STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.STATUS_FILE.write_text(
+                json.dumps(status, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            print(f"   [WARN] Failed to write scheduler status: {e}")
+
+    def _read_control(self) -> dict:
+        """Read control file; returns {'enabled': True} if file not found."""
+        try:
+            if self.CONTROL_FILE.exists():
+                return json.loads(self.CONTROL_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"   [WARN] Failed to read scheduler control file: {e}")
+        return {"enabled": True}
+
+    def _run_crawler(self) -> dict:
+        """
+        启动爬虫项目并等待其完成。
+
+        返回格式：
+          {"status": "success"|"skipped"|"failed"|"timeout",
+           "returncode": int|None,
+           "duration_s": float,
+           "message": str}
+        """
+        if not CRAWLER_COMMAND:
+            return {"status": "skipped", "returncode": None,
+                    "duration_s": 0.0, "message": "CRAWLER_COMMAND 未配置，跳过爬虫"}
+
+        work_dir = str(CRAWLER_WORK_DIR) if CRAWLER_WORK_DIR and CRAWLER_WORK_DIR.exists() else None
+        cmd_parts = CRAWLER_COMMAND.split()
+
+        print(f"\n{'─' * 50}")
+        print(f"🕷️  启动爬虫: {CRAWLER_COMMAND}")
+        if work_dir:
+            print(f"   工作目录: {work_dir}")
+        print(f"   超时限制: {CRAWLER_TIMEOUT}s")
+        print(f"{'─' * 50}")
+
+        t0 = datetime.now()
+        try:
+            proc = subprocess.Popen(
+                cmd_parts,
+                cwd=work_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            # 实时打印爬虫输出，同时等待超时
+            try:
+                stdout, _ = proc.communicate(timeout=CRAWLER_TIMEOUT)
+                if stdout:
+                    for line in stdout.splitlines()[-30:]:   # 最多打印末尾30行
+                        print(f"   [CRAWLER] {line}")
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                duration = (datetime.now() - t0).total_seconds()
+                msg = f"爬虫超时（>{CRAWLER_TIMEOUT}s），已强制终止"
+                print(f"   ⚠️  {msg}")
+                return {"status": "timeout", "returncode": None,
+                        "duration_s": round(duration, 1), "message": msg}
+
+            duration = (datetime.now() - t0).total_seconds()
+            if proc.returncode == 0:
+                msg = f"爬虫执行成功 (耗时 {duration:.0f}s)"
+                print(f"   ✅ {msg}")
+                return {"status": "success", "returncode": 0,
+                        "duration_s": round(duration, 1), "message": msg}
+            else:
+                msg = f"爬虫退出码 {proc.returncode}（耗时 {duration:.0f}s）"
+                print(f"   ❌ {msg}")
+                return {"status": "failed", "returncode": proc.returncode,
+                        "duration_s": round(duration, 1), "message": msg}
+
+        except FileNotFoundError:
+            duration = (datetime.now() - t0).total_seconds()
+            msg = f"找不到爬虫命令：{cmd_parts[0]}"
+            print(f"   ❌ {msg}")
+            return {"status": "failed", "returncode": None,
+                    "duration_s": round(duration, 1), "message": msg}
+        except Exception as e:
+            duration = (datetime.now() - t0).total_seconds()
+            msg = f"爬虫启动异常：{e}"
+            print(f"   ❌ {msg}")
+            return {"status": "failed", "returncode": None,
+                    "duration_s": round(duration, 1), "message": msg}
 
     def _get_content_dates(self) -> list:
         """获取内容数据(帖子/评论)的可用日期"""
@@ -73,12 +212,49 @@ class DataCollectorScheduler:
 
     def collect_and_process(self):
         """执行完整的数据采集和处理流程"""
+
+        # Check control file – skip if scheduler is disabled
+        control = self._read_control()
+        if not control.get("enabled", True):
+            print(f"\n[INFO] Scheduler disabled via control file – skipping run.")
+            return
+
+        start_time = datetime.now()
         print(f"\n{'=' * 60}")
-        print(f"🕒 开始数据采集 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🕒 开始完整流水线 - {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 60}")
 
+        # Mark as running
+        self._write_status(is_running=True)
+
+        run_record = {
+            "start_time": start_time.isoformat(timespec="seconds"),
+            "end_time": None,
+            "status": "failed",
+            "error": None,
+            "crawler": None,
+            "stats": {},
+        }
+
         try:
-            # 1. 分别获取内容和创作者的可用日期
+            # ── 步骤 0：运行爬虫（若已配置）──────────────────────────────
+            crawler_result = self._run_crawler()
+            run_record["crawler"] = crawler_result
+
+            # 爬虫失败时根据配置决定是否继续
+            if crawler_result["status"] in ("failed", "timeout"):
+                if CRAWLER_SKIP_ON_FAILURE:
+                    end_time = datetime.now()
+                    run_record["end_time"] = end_time.isoformat(timespec="seconds")
+                    run_record["status"] = "failed"
+                    run_record["error"] = f"爬虫未成功：{crawler_result['message']}"
+                    self._write_status(is_running=False, last_run=run_record)
+                    print(f"\n⏭️  CRAWLER_SKIP_ON_FAILURE=true，跳过本次分析")
+                    return
+                else:
+                    print(f"\n⚠️  爬虫失败但 CRAWLER_SKIP_ON_FAILURE=false，继续分析")
+
+            # ── 步骤 1：分别获取内容和创作者的可用日期 ──────────────────
             content_dates = self._get_content_dates()
             creator_dates = self._get_creator_dates()
 
@@ -244,10 +420,28 @@ class DataCollectorScheduler:
             print(f"   📤 传递 {len(all_user_files)} 个用户文件给下游任务")
             self._trigger_downstream_tasks(env)
 
+            # Mark run as successful
+            end_time = datetime.now()
+            run_record["end_time"] = end_time.isoformat(timespec="seconds")
+            run_record["status"] = "success"
+            run_record["stats"] = {
+                "posts_raw": len(df_posts_raw),
+                "comments_raw": len(df_comments_raw),
+                "posts_cleaned": len(df_posts_cleaned),
+                "comments_cleaned": len(df_comments_cleaned),
+            }
+            self._write_status(is_running=False, last_run=run_record)
+
         except Exception as e:
             print(f"\n❌ 数据采集失败: {e}")
             import traceback
             traceback.print_exc()
+
+            end_time = datetime.now()
+            run_record["end_time"] = end_time.isoformat(timespec="seconds")
+            run_record["status"] = "failed"
+            run_record["error"] = str(e)
+            self._write_status(is_running=False, last_run=run_record)
 
     def _trigger_downstream_tasks(self, env=None):
         """触发下游分析任务(BERTopic + 情感分析并行 + 用户画像)"""
@@ -397,23 +591,30 @@ class DataCollectorScheduler:
         except Exception as e:
             print(f"   ⚠️ 数据库同步失败（CSV 仍可用）: {e}")
 
-    def run_scheduler(self, interval_hours=6):
+    def run_scheduler(self):
         """
         运行定时任务
 
-        Args:
-            interval_hours: 执行间隔（小时），默认6小时
+        默认在每天 12:00 和 21:00 执行采集流程。
+        若环境变量 COLLECT_INTERVAL_HOURS 被设置为非零整数，则额外按该间隔（小时）触发一次。
         """
         print(f"🚀 启动定时任务调度器")
-        print(f"⏰ 执行间隔: {interval_hours} 小时")
+        print(f"⏰ 采集时间: 每日 12:00 / 21:00")
         print(f"📂 数据源: {MEDIA_CRAWLER_DATA_DIR}")
         print(f"📋 流程: 采集 → 清洗 → BERTopic → 用户画像\n")
 
         # 立即执行一次
         self.collect_and_process()
 
-        # 设置定时任务（tag 便于区分任务类型）
-        schedule.every(interval_hours).hours.do(self.collect_and_process).tag("pipeline")
+        # 固定时间触发（12:00 和 21:00）
+        schedule.every().day.at("12:00").do(self.collect_and_process).tag("pipeline")
+        schedule.every().day.at("21:00").do(self.collect_and_process).tag("pipeline")
+
+        # 可选：若设置了 COLLECT_INTERVAL_HOURS（且非零），按小时间隔额外触发
+        interval_hours = int(os.getenv('COLLECT_INTERVAL_HOURS', '0'))
+        if interval_hours > 0:
+            print(f"⏰ 额外间隔: 每 {interval_hours} 小时触发一次")
+            schedule.every(interval_hours).hours.do(self.collect_and_process).tag("pipeline")
 
         # 每日凌晨 3 点额外执行一次数据库同步（防止仅手动跑过 CSV 未入库）
         schedule.every().day.at("03:00").do(self._sync_to_database_and_refresh_cache).tag("db_sync")
@@ -430,10 +631,7 @@ class DataCollectorScheduler:
 def main():
     """主函数"""
     scheduler = DataCollectorScheduler()
-
-    # 可配置执行间隔
-    interval = int(os.getenv('COLLECT_INTERVAL_HOURS', '6'))
-    scheduler.run_scheduler(interval_hours=interval)
+    scheduler.run_scheduler()
 
 
 if __name__ == "__main__":

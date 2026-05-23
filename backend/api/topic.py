@@ -178,6 +178,73 @@ async def get_topic_details(topic_id: int):
     })
 
 
+@router.get("/evolution", response_model=Response)
+async def get_topic_evolution(interval: str = "week", top_n: int = 6):
+    """动态主题演化：按时间段统计各话题帖子数量，供 ThemeRiver 图使用"""
+    try:
+        data_loader = get_data_loader()
+        df_posts = data_loader.load_posts()
+        df_topics_meta = data_loader.load_bertopic_results()
+
+        if df_posts.empty or 'Topic' not in df_posts.columns:
+            return Response(code=200, data={"series": [], "legend": []})
+
+        # 解析时间字段
+        time_col = 'create_date_time' if 'create_date_time' in df_posts.columns else 'create_time'
+        if time_col not in df_posts.columns:
+            return Response(code=200, data={"series": [], "legend": []})
+
+        df = df_posts.copy()
+        df['dt'] = pd.to_datetime(df[time_col], errors='coerce')
+        df = df.dropna(subset=['dt'])
+        df = df[df['Topic'] != -1]
+
+        if df.empty:
+            return Response(code=200, data={"series": [], "legend": []})
+
+        # 话题名称映射
+        topic_name_map: dict = {}
+        if not df_topics_meta.empty and 'Topic' in df_topics_meta.columns:
+            for _, row in df_topics_meta.iterrows():
+                tid = row.get('Topic')
+                name = row.get('topic_name', f'话题{tid}')
+                if tid is not None and not (isinstance(tid, float) and math.isnan(tid)):
+                    topic_name_map[int(tid)] = str(name)
+
+        # 选出热度 top_n 个话题
+        hot_topics = df['Topic'].value_counts().head(top_n).index.tolist()
+        df = df[df['Topic'].isin(hot_topics)].copy()
+        df['topic_name'] = df['Topic'].apply(lambda t: topic_name_map.get(int(t), f'话题{t}'))
+
+        # 按时间粒度分组
+        if interval == 'day':
+            df['period'] = df['dt'].dt.strftime('%Y-%m-%d')
+        elif interval == 'month':
+            df['period'] = df['dt'].dt.strftime('%Y-%m')
+        else:  # week（默认）
+            df['period'] = df['dt'].dt.to_period('W').apply(lambda p: str(p.start_time.date()))
+
+        # 统计并转换为 ThemeRiver 格式 [[date, count, topic_name], ...]
+        grouped = (
+            df.groupby(['period', 'topic_name'])
+            .size()
+            .reset_index(name='count')
+            .sort_values('period')
+        )
+
+        series_data = [
+            [row['period'], int(row['count']), row['topic_name']]
+            for _, row in grouped.iterrows()
+        ]
+        legend = list(grouped['topic_name'].unique())
+
+        return Response(code=200, data={"series": series_data, "legend": legend})
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] /api/topic/evolution: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/bar", response_model=Response)
 async def get_topic_sentiment_bar():
     """按话题大类（Category）汇总的情感分布"""

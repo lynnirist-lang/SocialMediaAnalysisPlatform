@@ -13,8 +13,15 @@
     <el-row :gutter="20" style="margin-top: 20px">
       <el-col :span="16">
         <div class="chart-card">
-          <div class="card-header">用户传播网络</div>
-          <div ref="networkChartRef" style="height: 450px;"></div>
+          <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>动态主题演化追踪</span>
+            <el-radio-group v-model="topicInterval" size="small" @change="loadTopicEvolution">
+              <el-radio-button value="day">按日</el-radio-button>
+              <el-radio-button value="week">按周</el-radio-button>
+              <el-radio-button value="month">按月</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div ref="topicEvolutionRef" style="height: 450px;"></div>
         </div>
       </el-col>
       <el-col :span="8">
@@ -28,18 +35,50 @@
     <div class="chart-card" style="margin-top: 20px">
       <div class="card-header">影响力用户排行</div>
       <el-table :data="userList" stripe style="width: 100%">
-         <el-table-column prop="user_id" label="用户ID" width="180">
+        <el-table-column prop="user_id" label="用户" width="150">
           <template #default="scope">
             {{ scope.row.nickname || scope.row.user_id }}
           </template>
         </el-table-column>
-        <el-table-column prop="fans_count" label="粉丝数" sortable />
-        <el-table-column prop="pagerank_score" label="PageRank影响力" width="150">
+        <el-table-column prop="fans_count" label="粉丝数" sortable width="100" />
+        <el-table-column prop="activity_score" label="活跃度" sortable width="140">
           <template #default="scope">
-            <el-progress :percentage="Math.min(scope.row.pagerank_score * 1000, 100)" :format="() => scope.row.pagerank_score.toFixed(4)" />
+            <el-progress
+              :percentage="Math.min(scope.row.activity_score ?? 0, 100)"
+              :format="() => (scope.row.activity_score ?? 0).toFixed(0)"
+              :color="activityColor(scope.row.activity_score)"
+            />
           </template>
         </el-table-column>
-        <el-table-column prop="user_role" label="预测角色">
+        <el-table-column prop="influence_score" label="影响力得分" sortable width="140">
+          <template #default="scope">
+            <el-progress
+              :percentage="Math.min((scope.row.influence_score ?? 0) * 100, 100)"
+              :format="() => (scope.row.influence_score ?? 0).toFixed(3)"
+              status="warning"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="sentiment_tendency" label="情感倾向" width="90">
+          <template #default="scope">
+            <el-tag :type="getSentimentTagType(scope.row.sentiment_tendency)" size="small">
+              {{ scope.row.sentiment_tendency || '中性' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="兴趣主题" width="160">
+          <template #default="scope">
+            <el-tag
+              v-for="topic in (scope.row.top_topics || []).slice(0, 2)"
+              :key="topic"
+              type="info"
+              size="small"
+              style="margin-right: 4px; margin-bottom: 2px;"
+            >{{ topic }}</el-tag>
+            <span v-if="!scope.row.top_topics || scope.row.top_topics.length === 0" style="color:#ccc;font-size:12px">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="user_role" label="预测角色" width="110">
           <template #default="scope">
             <el-tag :type="getRoleTagType(scope.row.user_role)">{{ scope.row.user_role }}</el-tag>
           </template>
@@ -57,9 +96,10 @@ import request from '../api/request'
 const globalDateRange = inject('globalDateRange')
 const globalSearch = inject('globalSearch')
 
-const networkChartRef = ref(null)
+const topicEvolutionRef = ref(null)
 const roleChartRef = ref(null)
 const userList = ref([])
+const topicInterval = ref('week')
 const userStats = ref([
   { label: '平均PageRank', value: '-', icon: 'Star', color: 'blue' },
   { label: '网络密度', value: '-', icon: 'Share', color: 'green' },
@@ -67,7 +107,7 @@ const userStats = ref([
   { label: '传播层级', value: '-', icon: 'Histogram', color: 'purple' }
 ])
 
-let networkChart = null
+let topicEvolutionChart = null
 let roleChart = null
 
 const getRoleTagType = (role) => {
@@ -81,10 +121,62 @@ const getRoleTagType = (role) => {
   return typeMap[role] || 'info'
 }
 
+const getSentimentTagType = (tendency) => {
+  if (tendency === '积极') return 'success'
+  if (tendency === '消极') return 'danger'
+  return 'info'
+}
+
+const activityColor = (score) => {
+  const v = score ?? 0
+  if (v >= 70) return '#67C23A'
+  if (v >= 40) return '#E6A23C'
+  return '#909399'
+}
+
+const loadTopicEvolution = async () => {
+  if (!topicEvolutionChart) return
+  try {
+    const res = await request.get(`/api/topic/evolution?interval=${topicInterval.value}&top_n=6`)
+    if (res.data.code !== 200) return
+    const { series, legend } = res.data.data
+    if (!series || series.length === 0) {
+      topicEvolutionChart.setOption({
+        title: { text: '暂无话题时序数据', left: 'center', top: 'middle', textStyle: { color: '#ccc', fontSize: 14 } }
+      })
+      return
+    }
+    topicEvolutionChart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: legend, top: 10, type: 'scroll' },
+      singleAxis: [{
+        type: 'time',
+        axisLabel: { formatter: (val) => new Date(val).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) },
+        top: '15%',
+        height: '75%',
+        axisLine: { lineStyle: { color: '#ccc' } }
+      }],
+      series: [{
+        type: 'themeRiver',
+        emphasis: { itemStyle: { shadowBlur: 20, shadowColor: 'rgba(0,0,0,0.2)' } },
+        label: { show: true, margin: 4 },
+        data: series
+      }]
+    }, true)
+  } catch (e) {
+    console.error('加载主题演化数据失败:', e)
+  }
+}
+
 const loadData = async () => {
   const apiBase = '/api/user'
   try {
-    const statsRes = await request.get(`${apiBase}/stats`)
+    const [statsRes, listRes, roleRes] = await Promise.all([
+      request.get(`${apiBase}/stats`),
+      request.get(`${apiBase}/list?page_size=10`),
+      request.get(`${apiBase}/role-distribution`)
+    ])
+
     if (statsRes.data.code === 200) {
       const stats = statsRes.data.data
       userStats.value = [
@@ -95,36 +187,8 @@ const loadData = async () => {
       ]
     }
 
-    const listRes = await request.get(`${apiBase}/list?page_size=10`)
     userList.value = listRes.data.data?.users || []
 
-    const netRes = await request.get(`${apiBase}/network?top_n=30`)
-    if (netRes.data.code === 200 && netRes.data.data.nodes.length > 0 && networkChart) {
-      networkChart.setOption({
-        tooltip: {},
-        legend: [{ data: ['核心传播者', '意见领袖', '活跃参与者', '潜力用户', '普通用户'] }],
-        series: [{
-          type: 'graph',
-          layout: 'force',
-          symbolSize: 20,
-          roam: true,
-          label: { show: true, position: 'right' },
-          force: { repulsion: 150, edgeLength: 100 },
-          categories: [
-            { name: '核心传播者' },
-            { name: '意见领袖' },
-            { name: '活跃参与者' },
-            { name: '潜力用户' },
-            { name: '普通用户' }
-          ],
-          data: netRes.data.data.nodes,
-          links: netRes.data.data.links,
-          lineStyle: { color: 'source', curveness: 0.1 }
-        }]
-      })
-    }
-
-    const roleRes = await request.get(`${apiBase}/role-distribution`)
     if (roleRes.data.code === 200 && roleRes.data.data.length > 0 && roleChart) {
       roleChart.setOption({
         tooltip: { trigger: 'item' },
@@ -139,6 +203,8 @@ const loadData = async () => {
         }]
       })
     }
+
+    await loadTopicEvolution()
   } catch (error) {
     console.error('加载用户数据失败:', error)
   }
@@ -149,12 +215,12 @@ watch([globalDateRange, globalSearch], () => {
 }, { deep: true })
 
 const handleResize = () => {
-  networkChart?.resize()
+  topicEvolutionChart?.resize()
   roleChart?.resize()
 }
 
 onMounted(() => {
-  networkChart = echarts.init(networkChartRef.value)
+  topicEvolutionChart = echarts.init(topicEvolutionRef.value)
   roleChart = echarts.init(roleChartRef.value)
   loadData()
   window.addEventListener('resize', handleResize)
@@ -162,7 +228,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
-  networkChart?.dispose()
+  topicEvolutionChart?.dispose()
   roleChart?.dispose()
 })
 </script>

@@ -25,6 +25,10 @@
           <el-icon><User /></el-icon>
           <span>用户画像</span>
         </el-menu-item>
+        <el-menu-item index="scheduler">
+          <el-icon><Timer /></el-icon>
+          <span>任务监控</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -69,11 +73,12 @@
 import { ref, provide, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { DataLine, PieChart, Connection, User } from '@element-plus/icons-vue'
+import { DataLine, PieChart, Connection, User, Timer } from '@element-plus/icons-vue'
 import Dashboard from '../components/Dashboard.vue'
 import Sentiment from '../components/Sentiment.vue'
 import Topic from '../components/Topic.vue'
 import UserProfile from '../components/UserProfile.vue'
+import SchedulerMonitor from '../components/SchedulerMonitor.vue'
 import { useAuthStore } from '../stores/auth'
 import request from '../api/request'
 
@@ -87,12 +92,12 @@ provide('globalDateRange', globalDateRange)
 provide('globalSearch', globalSearch)
 
 const currentComponent = computed(() => {
-  const components = { dashboard: Dashboard, sentiment: Sentiment, topic: Topic, user: UserProfile }
+  const components = { dashboard: Dashboard, sentiment: Sentiment, topic: Topic, user: UserProfile, scheduler: SchedulerMonitor }
   return components[activeMenu.value]
 })
 
 const pageTitle = computed(() => {
-  const titles = { dashboard: '数据看板', sentiment: '情感分析', topic: '主题洞察', user: '用户画像' }
+  const titles = { dashboard: '数据看板', sentiment: '情感分析', topic: '主题洞察', user: '用户画像', scheduler: '任务监控' }
   return titles[activeMenu.value]
 })
 

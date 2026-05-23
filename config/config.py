@@ -70,6 +70,12 @@ MEDIA_CRAWLER_DATA_DIR = Path(
     os.getenv("MEDIA_CRAWLER_DATA_DIR", r"E:\MyProjects\MediaCrawler\data\weibo\csv")
 )
 
+# ==================== 爬虫集成（串行流水线） ====================
+CRAWLER_WORK_DIR = Path(os.getenv("CRAWLER_WORK_DIR", ""))
+CRAWLER_COMMAND = os.getenv("CRAWLER_COMMAND", "")
+CRAWLER_TIMEOUT = int(os.getenv("CRAWLER_TIMEOUT", "3600"))
+CRAWLER_SKIP_ON_FAILURE = os.getenv("CRAWLER_SKIP_ON_FAILURE", "true").lower() in ("1", "true", "yes")
+
 # ==================== SQLite 数据库 ====================
 DATA_DIR = PROJECT_ROOT / "data"
 DATABASE_PATH = DATA_DIR / "social_media.db"

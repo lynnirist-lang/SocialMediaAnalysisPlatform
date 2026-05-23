@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from backend.api import auth, dashboard, sentiment, topic, user
+from backend.api import auth, dashboard, scheduler_api, sentiment, topic, user
 from backend.database import init_db
 from config.config import ensure_dirs_exist
 from fastapi.responses import StreamingResponse
@@ -75,6 +75,7 @@ app.include_router(sentiment.router, prefix="/api/sentiment", tags=["情感分�
 app.include_router(topic.router, prefix="/api/topic", tags=["主题分析"])
 app.include_router(user.router, prefix="/api/user", tags=["用户画像"])
 app.include_router(auth.router, prefix="/api/auth", tags=["用户认证"])
+app.include_router(scheduler_api.router, prefix="/api/scheduler", tags=["调度监控"])
 
 
 
@@ -94,6 +95,41 @@ async def clear_cache():
     """手动清除所有缓存"""
     data_loader.invalidate_all_cache()
     return {"status": "success", "message": "缓存已清除"}
+
+
+@app.get("/api/data/tier-stats")
+async def data_tier_stats():
+    """查看三层存储的数据热度分布统计"""
+    if data_loader.tier_manager is None:
+        return {"error": "DataTierManager 未启用（Redis 不可用）"}
+    stats = data_loader.tier_manager.get_tier_stats()
+    tiers = data_loader.tier_manager.TIERS
+    return {
+        "tier_distribution": stats,
+        "tier_config": {
+            k: {"min_score": v["min_score"], "ttl_seconds": v["ttl"], "label": v["label"]}
+            for k, v in tiers.items()
+        },
+    }
+
+
+@app.post("/api/data/migrate-cold")
+async def migrate_cold_data(cutoff_days: int = 60, dry_run: bool = True):
+    """
+    将低热度历史数据从 SQLite 归档到冷层（仅保留 CSV）。
+    dry_run=true  仅统计，不删除；dry_run=false 执行删除。
+    """
+    if data_loader.tier_manager is None:
+        return {"error": "DataTierManager 未启用"}
+    from backend.database import SessionLocal
+    session = SessionLocal()
+    try:
+        result = data_loader.tier_manager.migrate_cold_data(
+            session, cutoff_days=cutoff_days, dry_run=dry_run
+        )
+        return {"status": "ok", "result": result}
+    finally:
+        session.close()
 
 
 @app.get("/api/cache/stats")

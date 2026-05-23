@@ -25,7 +25,7 @@ except ImportError:
 
 
 class DataLoader:
-    """统一数据加载服务"""
+    """统一数据加载服务（含三层热度感知缓存）"""
 
     def __init__(self, use_cache=True, cache_ttl=3600):
         self.base_dir = Path(__file__).parents[2]
@@ -50,6 +50,15 @@ class DataLoader:
             self.redis_client = None
 
         self._db_available = None
+
+        # 三层热度迁移管理器
+        try:
+            from backend.services.data_tier_manager import DataTierManager
+            self.tier_manager = DataTierManager(
+                redis_client=self.redis_client if self.use_cache else None
+            )
+        except Exception:
+            self.tier_manager = None
 
     def _database_enabled(self) -> bool:
         """检测是否使用 SQLite（库表存在且有帖子数据）"""
@@ -157,15 +166,26 @@ class DataLoader:
             print(f"[CACHE ERROR] 读取失败: {e}")
         return None
 
-    def _set_to_cache(self, key, data):
-        """将数据存入缓存"""
+    def _set_to_cache(self, key, data, ttl: int | None = None):
+        """将数据存入缓存；ttl 为 None 时使用默认 TTL；ttl=0 跳过缓存"""
         if not self.use_cache or not self.redis_client:
             return
+        actual_ttl = ttl if ttl is not None else self.cache_ttl
+        if actual_ttl <= 0:
+            print(f"[CACHE SKIP] {key} (冷数据，不缓存)")
+            return
         try:
-            self.redis_client.setex(key, self.cache_ttl, json.dumps(data))
-            print(f"[CACHE SET] {key} (TTL: {self.cache_ttl}s)")
+            self.redis_client.setex(key, actual_ttl, json.dumps(data))
+            print(f"[CACHE SET] {key} (TTL: {actual_ttl}s)")
         except Exception as e:
             print(f"[CACHE ERROR] 写入失败: {e}")
+
+    def _tier_ttl(self, cache_key: str, data_date: str | None = None, importance: float = 0.5) -> int:
+        """通过热度管理器获取动态 TTL；无管理器时退回默认 TTL"""
+        if self.tier_manager is None:
+            return self.cache_ttl
+        self.tier_manager.record_access(cache_key)
+        return self.tier_manager.get_dynamic_ttl(cache_key, data_date, importance)
 
     def _invalidate_cache_pattern(self, pattern):
         """清除匹配模式的缓存"""
@@ -218,7 +238,9 @@ class DataLoader:
         if self._database_enabled():
             df_all = self._posts_df_from_db(start_date, end_date)
             print(f"[DEBUG] 从数据库加载帖子: {len(df_all)} 条")
-            self._set_to_cache(cache_key, df_all.to_dict('records'))
+            date_hint = str(start_date) if start_date else None
+            ttl = self._tier_ttl(cache_key, date_hint)
+            self._set_to_cache(cache_key, df_all.to_dict('records'), ttl=ttl)
             return df_all
 
         all_files = list(CLEANED_DATA_DIR.glob('posts_cleaned_merged*.csv'))
@@ -319,7 +341,9 @@ class DataLoader:
             df_all = df_all[mask]
             print(f"[DEBUG] 日期过滤后: {len(df_all)} 条")
 
-        self._set_to_cache(cache_key, df_all.to_dict('records'))
+        date_hint = str(start_date) if start_date else None
+        ttl = self._tier_ttl(cache_key, date_hint)
+        self._set_to_cache(cache_key, df_all.to_dict('records'), ttl=ttl)
         return df_all
 
     def load_comments(self, start_date=None, end_date=None):
@@ -338,7 +362,9 @@ class DataLoader:
         if self._database_enabled():
             df_all = self._comments_df_from_db(start_date, end_date)
             print(f"[DEBUG] 从数据库加载评论: {len(df_all)} 条")
-            self._set_to_cache(cache_key, df_all.to_dict('records'))
+            date_hint = str(start_date) if start_date else None
+            ttl = self._tier_ttl(cache_key, date_hint)
+            self._set_to_cache(cache_key, df_all.to_dict('records'), ttl=ttl)
             return df_all
 
         all_files = list(CLEANED_DATA_DIR.glob('comments_cleaned_*.csv'))
@@ -400,7 +426,9 @@ class DataLoader:
             df_all = df_all[mask]
             print(f"[DEBUG] 日期过滤后: {len(df_all)} 条")
 
-        self._set_to_cache(cache_key, df_all.to_dict('records'))
+        date_hint = str(start_date) if start_date else None
+        ttl = self._tier_ttl(cache_key, date_hint)
+        self._set_to_cache(cache_key, df_all.to_dict('records'), ttl=ttl)
         return df_all
 
     def load_user_stats(self, start_date=None, end_date=None):
@@ -420,7 +448,11 @@ class DataLoader:
             df = self._user_stats_df_from_db(start_date, end_date)
             if not df.empty:
                 df = self._enrich_user_nicknames(df)
-                self._set_to_cache(cache_key, df.to_dict('records'))
+                date_hint = str(start_date) if start_date else None
+                # 用户画像重要性取 pagerank 均值作为 importance hint
+                importance = float(df['pagerank_score'].mean()) if 'pagerank_score' in df.columns else 0.5
+                ttl = self._tier_ttl(cache_key, date_hint, importance=min(importance * 200, 1.0))
+                self._set_to_cache(cache_key, df.to_dict('records'), ttl=ttl)
                 return df
             if start_date and end_date and start_date == end_date:
                 return pd.DataFrame()
@@ -453,7 +485,10 @@ class DataLoader:
             df['user_id'] = df['user_id'].apply(lambda x: x[:-2] if x.endswith('.0') else x)
 
         df = self._enrich_user_nicknames(df)
-        self._set_to_cache(cache_key, df.to_dict('records'))
+        date_hint = str(start_date) if start_date else None
+        importance = float(df['pagerank_score'].mean()) if 'pagerank_score' in df.columns else 0.5
+        ttl = self._tier_ttl(cache_key, date_hint, importance=min(importance * 200, 1.0))
+        self._set_to_cache(cache_key, df.to_dict('records'), ttl=ttl)
         return df
 
     def _enrich_user_nicknames(self, df: pd.DataFrame) -> pd.DataFrame:

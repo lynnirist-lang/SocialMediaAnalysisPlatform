@@ -109,3 +109,63 @@ class TestUserAPI:
         if response.status_code == 200:
             data = response.json()
             assert data["code"] == 404
+
+    def test_user_list_new_fields_present(self, client):
+        """测试用户列表响应中包含新增字段"""
+        response = client.get("/api/user/list")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["code"] == 200
+
+        if data["data"]["users"]:
+            user = data["data"]["users"][0]
+            assert "activity_score" in user
+            assert "influence_score" in user
+            assert "sentiment_tendency" in user
+            assert "top_topics" in user
+
+    def test_user_list_activity_score_range(self, client):
+        """测试 activity_score 的取值范围在 0-100 之间"""
+        response = client.get("/api/user/list")
+        data = response.json()
+
+        if data["data"]["users"]:
+            for user in data["data"]["users"]:
+                score = user["activity_score"]
+                assert isinstance(score, (int, float))
+                assert 0 <= score <= 100
+
+    def test_user_list_influence_score_range(self, client):
+        """测试 influence_score 的取值范围在 0-1 之间"""
+        response = client.get("/api/user/list")
+        data = response.json()
+
+        if data["data"]["users"]:
+            for user in data["data"]["users"]:
+                score = user["influence_score"]
+                assert isinstance(score, (int, float))
+                assert 0 <= score <= 1
+
+    def test_user_list_sentiment_tendency_values(self, client):
+        """测试 sentiment_tendency 仅包含合法取值"""
+        response = client.get("/api/user/list")
+        data = response.json()
+
+        valid_tendencies = {"积极", "消极", "中性"}
+        if data["data"]["users"]:
+            for user in data["data"]["users"]:
+                assert user["sentiment_tendency"] in valid_tendencies
+
+    def test_user_list_top_topics_structure(self, client):
+        """测试 top_topics 为最多两项的字符串列表"""
+        response = client.get("/api/user/list")
+        data = response.json()
+
+        if data["data"]["users"]:
+            for user in data["data"]["users"]:
+                top_topics = user["top_topics"]
+                assert isinstance(top_topics, list)
+                assert len(top_topics) <= 2
+                for topic in top_topics:
+                    assert isinstance(topic, str)
