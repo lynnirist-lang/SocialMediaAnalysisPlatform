@@ -117,6 +117,21 @@ BERTopic是一种建立在深度语义表示基础之上的主题建模方法，
 本系统的功能性需求主要涵盖数据采集与管理、情感分析、主题挖掘、用户画像及可视化展示五个方面；Karamouzas等[29]通过对推文进行集体语义分析来监测公众舆论，其研究揭示了实时查询与多维可视化在舆情系统中的核心地位，为本系统功能设计提供了重要参考。在数据采集与管理层面，系统需支持基于关键词的热搜话题自动采集，实现从话题到评论再到用户信息的层级化关联抓取，并提供数据清洗与去重功能，确保后续分析输入的质量。在情感分析层面，系统需对采集到的微博文本进行正面、负面、中性的三分类识别，支持批量处理，并将标注结果持久化存储以备后续调用。在主题挖掘层面，系统需能够自动发现话题聚类，无需人工预设主题数量，并为每个话题生成语义清晰的标题标签，支持按时间维度追踪话题热度变化。在用户画像层面，系统需构建多维特征向量，结合网络结构指标与行为特征对用户进行角色分类，识别关键传播节点。在可视化展示层面，系统需提供交互式仪表盘，直观呈现舆情趋势、情感分布、话题结构及用户关系网络，支持按时间范围与关键词进行筛选查询。
 
 
+===3.2 系统业务流程===
+
+系统的完整业务流程如图3.2所示，涵盖从用户发起请求到前端完成可视化展示的全链路处理过程。
+
+用户通过浏览器访问Vue.js前端页面，触发数据查询或分析请求。前端将请求封装为标准HTTP调用，发送至FastAPI后端。值得注意的是，后端在真正执行业务逻辑之前，首先会进行缓存检查：系统优先查询Redis中是否存在对应的有效缓存项，若命中则直接将结果序列化返回，绕过数据库与算法模块，从而将响应延迟控制在毫秒级别——这也是核心接口响应时延能够低至4~7ms的主要原因。
+
+若Redis未命中，请求进入SQLite查询阶段。后端通过SQLAlchemy ORM对posts、comments、user_stats等数据表发起结构化查询，根据前端传入的时间范围、关键词等参数完成过滤与聚合。如前文所述（详见3.3.1节），SQLite承担"温存储"职责，其索引设计针对source_date、user_id、create_date_time等高频查询字段进行了优化，能够支持毫秒至百毫秒量级的在线响应。
+
+完成数据检索后，后端视请求类型决定是否调用算法模块。以情感分布查询为例，数据库中已存储BERT微调模型输出的sentiment字段（取值为positive/negative/neutral）与对应的confidence浮点值，通常直接聚合即可返回；若涉及BERTopic主题分析或用户画像的重新计算，则会进一步调用相应的算法服务，并将计算结果异步写回CSV文件与SQLite数据库。Karamouzas等[29]在面向公众舆论监测的集体语义分析研究中指出，实时查询与结构化结果存储的协同设计，是保证系统高可用性的关键所在，本系统的流程设计与这一思路一脉相承。
+
+算法结果写入存储后，系统会主动清除与该数据关联的Redis缓存键，确保后续请求读取到最新结果，而非过期的聚合数据。随后，后端将最终结果以JSON格式返回给Vue.js前端。前端基于ECharts完成可视化渲染，将情感分布、话题热度趋势、用户关系网络等分析结果以交互式图表的形式呈现给用户。Knittel等[16]对高量级社交媒体帖子实时可视化的探索表明，情感识别结果与图表展示的深度融合能够显著提升舆情分析系统的可用性，本系统的前端可视化设计亦以此为参照。
+
+整体而言，上述流程在"实时性"与"计算代价"之间取得了合理的平衡：高频重复请求通过缓存快速返回，低频的深度分析请求则触发完整的算法链路，结果落盘后供后续请求复用。
+
+
 ===3.3.1 三层存储架构概览===
 
 由于社交媒体舆情分析系统数据量较大、更新频繁、读写模式多样，本系统未采用单一存储方案，而是基于数据生命周期设计了三层混合存储架构，目标是实现"写入高效、查询快速、缓存及时"。
@@ -130,6 +145,39 @@ BERTopic是一种建立在深度语义表示基础之上的主题建模方法，
 在热度驱动的分层迁移机制方面，系统引入热度公式对数据访问热度进行量化评估，热度=0.5×访问频率+0.3×时效性+0.2×重要性，并依据热度值将数据划分至对应层级：热度≥0.65的数据进入热层（Redis），TTL为7200秒；热度在0.30~0.65之间的数据进入温层（SQLite缓存结果），TTL为3600秒；热度低于0.30的数据归入冷层，不进行缓存，直接通过SQLite查询或CSV读取获取。这一机制使系统能够根据实际访问模式自适应调整存储策略，在资源利用与响应性能之间取得较好的平衡。
 
 总体而言，系统采用"缓存优先、数据库兜底、文件备份"的访问策略：前端请求优先读取Redis缓存，若未命中则回退至SQLite查询，CSV文件仅在算法模块数据交换或极端降级场景下使用；这种分层设计使不同热度的数据均能获得最适合其访问模式的存储与读取方式。
+
+
+===3.3.2 数据库实体关系设计===
+
+系统的业务数据库包含四张核心数据表，其实体关系设计以数据生命周期与查询需求为导向，各表实体关系如图3.3所示。
+
+posts表与comments表之间存在一对多关系：一条微博帖子（posts.note_id）可对应多条评论记录（comments.note_id），两者通过note_id字段进行关联。需要指出的是，此处采用应用层外键而非数据库级外键约束，主要是考虑到SQLite在批量写入时的轻量化需求——对于每日定时采集的高并发写入场景，省略外键强制检查能够在不牺牲数据一致性的前提下提升写入吞吐量。
+
+user_stats表与posts、comments表均通过user_id字段建立横向关联，将用户的内容发布行为（posts/comments中的sentiment、topic字段）与其整体画像指标（user_stats中的pagerank_score、burst_power等）整合到同一分析视图下。相比之下，account_users表则与上述三张业务表完全隔离，仅承担系统账户认证职责，不参与任何舆情分析查询，从设计层面实现了鉴权逻辑与业务数据的解耦。
+
+在约束设计上，user_stats表对(user_id, stats_date)设置了联合唯一约束（uq_user_stats_date）。这一设计源于用户画像的"日快照"建模逻辑：系统每日运行一次画像计算任务，输出当天的用户特征向量，写入时若该用户当日记录已存在则执行更新而非重复插入，由此保证每位用户每天仅保留一条画像快照。Jing等[26]的调查研究指出，现有系统在结构化关系存储与NoSQL存储的协同管理方面缺乏灵活的分层策略，本系统在关系型设计上的显式约束，正是为了在轻量化嵌入式数据库的基础上保证数据的语义完整性。
+
+
+===3.3.3 核心数据表结构===
+
+posts表是整个系统的主数据载体，其字段设计兼顾了原始数据保存与算法处理结果的回写需求。值得注意的是，表中同时保留了content与cleaned_content两个文本字段，前者存储采集器输出的原始微博正文，后者存储经过清洗与去噪处理后的文本。保留双版本的原因在于算法可追溯性：BERT情感分类模型与BERTopic主题建模均基于cleaned_content进行推断，而在人工复核或模型迭代时，往往需要对照原始文本核查清洗逻辑是否引入偏差。此外，sentiment字段（取值为positive/negative/neutral的字符串）与confidence浮点字段共同记录了模型输出，topic整型字段则存储BERTopic分配的话题编号，三者均在数据入库时由算法模块写入。
+
+user_stats表的字段可归纳为五类维度：以post_count、reply_count、total_actions为代表的活跃度指标，以fans_count、pagerank_score、betweenness_score为代表的影响力与网络中心性指标，以in_degree_weighted、out_degree_weighted反映的互动方向特征，以burst_power、response_speed、active_duration刻画的时效性指标，以及originality_score与sentiment_intensity两项内容质量指标，共计13个数值维度。stats_date字段记录快照所属日期，配合user_id的联合唯一约束，支持按时间轴追踪用户画像的演变趋势。
+
+comments表在结构上与posts表高度对称，同样保留了content/cleaned_content双文本字段与sentiment/confidence分析结果字段，区别在于其note_id字段扮演外键角色，指向posts表中的对应帖子，从而支持"帖子—评论"的联合语义分析。各表均设有data_json字段，以Text类型存储完整的原始JSON备份，为数据迁移与格式扩展提供冗余保障。
+
+
+===3.3.4 缓存策略设计===
+
+系统的缓存策略以"热度驱动"为核心设计思路，而非对所有数据一视同仁地统一设置TTL。具体而言，系统引入热度评分公式对每条数据的访问价值进行量化：
+
+热度 = 0.5×访问频率 + 0.3×时效性 + 0.2×重要性
+
+其中，访问频率基于过去24小时的滑动窗口统计；时效性采用半衰期为14天的指数衰减函数计算，数据越陈旧得分越低；重要性则以该数据关联用户的归一化PageRank均值作为代理指标，反映其在舆情传播网络中的地位。
+
+依据热度得分，系统将数据分配至三个层级。热度≥0.65的数据进入热层，写入Redis并设置TTL=7200秒；热度在0.30至0.65之间的数据属于温层，同样写入Redis但TTL缩短为3600秒；热度低于0.30的冷层数据不进行缓存，直接回退至SQLite查询，必要时再从CSV文件读取。
+
+在访问链路上，系统采用"缓存优先、数据库兜底"的策略：每次前端请求到达后端时，优先检索Redis缓存；若命中，直接返回序列化结果；若未命中，则执行SQLite查询，查询结果根据当前热度得分决定是否写入Redis及对应的TTL时长。此外，系统还实现了主动缓存失效机制——当新一轮算法分析完成并将结果写回SQLite时，后端会主动清除与该数据批次相关的Redis缓存键，防止前端读取到已过期的聚合结果。Jing等[26]指出现有系统普遍缺乏面向动态数据的灵活分层缓存策略，本系统的热度驱动机制正是对这一不足的针对性回应，从实现角度而言，这种自适应分配方式使系统能够在有限的Redis内存资源下优先保障高频访问数据的低延迟响应，同时避免冷数据占用宝贵的缓存空间。
 
 
 ===4.3 基于BERT的情感分类模型===
@@ -160,6 +208,8 @@ BERTopic是一种建立在深度语义表示基础之上的主题建模方法，
 
 本文构建了包含13维特征的用户画像模型，涵盖活跃度、影响力、网络中心性、内容质量与时效性五大维度，具体特征划分如下：活跃度维度包括发帖频率、评论频率、转发频率；影响力维度包括粉丝数归一化值（fans_norm）、综合PageRank值（pagerank_norm）、爆发力指数（burst_norm）；网络中心性维度包括介数中心性、度中心性（入度与出度）；内容质量维度包括原创性得分（originality_norm）、平均点赞数归一化值；时效性维度包括近期活跃天数、发帖时间集中度及响应速度。上述13维特征共同构成用户的多维特征向量，为后续角色分类与影响力评估提供量化基础。
 
+各关键特征的计算方式如下。粉丝数归一化值（fans_norm）采用对数压缩后再按数据集最大值归一化的方式，即log(1+fans_count)/log(1+max_fans)，这样处理能有效抑制头部大V粉丝量对模型的过度影响。综合PageRank值（pagerank_norm）以转发与评论关系为边、频次为权重构建有向交互图，在此图上运行标准PageRank算法，结果归一化至[0,1]区间；陈安梅等[4]的研究表明，微博名人的结构性影响力在该类指标上具有显著体现。爆发力指数（burst_norm）则取用户在连续48小时峰值窗口内的互动量与其30天均值的比值，专门用于捕捉突发性传播事件中的影响峰值。原创性得分（originality_score）定义为用户原创发帖数占全部行为记录（total_actions）的比例，转发行为不计入原创。响应速度（response_speed）以用户收到的首次回复距其发帖时刻的时间中位数（单位：小时）衡量，数值越小表明内容关注度越高。介数中心性（betweenness_score）统计图中所有节点对之间经过该用户节点的最短路径比例，数值偏高意味着该用户在信息流动中扮演桥梁角色。以上特征均在归一化后汇入各维度得分。
+
 用户角色分类采用综合影响力得分公式进行评估：
 
 综合影响力得分 = 0.30×fans_norm + 0.30×pagerank_norm + 0.25×burst_norm + 0.15×originality_norm
@@ -169,6 +219,200 @@ BERTopic是一种建立在深度语义表示基础之上的主题建模方法，
 4.5.2 PageRank与行为特征融合方法
 
 在用户特征融合方面，PageRank值从网络结构层面评估用户的全局影响力，行为特征则从时序与内容层面补充用户的动态属性；二者结合能够有效弥补单一指标的局限，例如某些用户粉丝数量较少但PageRank值较高，说明其被高影响力节点频繁互动，实际传播能量不容忽视。通过多维加权融合，系统能够更精准地识别不同类型的关键传播角色，并支持按时间维度进行动态追踪与比较分析。
+
+
+===5.1 开发环境与技术栈===
+
+本系统在Windows 11环境下开发，部署时迁移至Ubuntu 20.04服务器。开发工具以PyCharm为主，借助Git进行版本管理。整体技术栈涵盖后端框架、前端渲染、数据存储以及模型训练四个维度，各层依赖相互独立，便于单独升级或替换。
+
+后端以Python 3.10为基础语言，选用FastAPI 0.110框架并以Uvicorn作为ASGI服务器，凭借其原生异步支持和自动生成OpenAPI文档的特性，显著降低了接口维护成本。前端采用Vue.js 3配合Vite构建工具，并集成ECharts 5实现情感趋势折线图、话题关系力导图、用户画像雷达图等多类交互式可视化组件，以满足Knittel等[16]所强调的情感识别结果与图表展示深度融合的系统可用性需求。持久化层由SQLite 3与SQLAlchemy 2.0 ORM共同承担，Redis 7.x则作为热点数据的内存缓存层。模型训练依赖PyTorch 2.x，开启FP16混合精度以加快微调速度；Transformers 4.x提供chinese-roberta-wwm-ext预训练权重的加载与序列化接口。主题挖掘方面引入BERTopic、sentence-transformers、UMAP-learn和hdbscan四个库协同完成嵌入与聚类；用户画像阶段使用NetworkX完成PageRank计算，并以pandas和jieba分别完成表格处理与中文分词。测试框架选用pytest，全项目共编写60个测试用例，覆盖接口、缓存、鉴权和性能等多类场景。
+
+表5-1 主要开发环境与依赖一览
+
+类别 | 名称/版本 | 用途说明
+操作系统 | Windows 11 / Ubuntu 20.04 | 开发环境 / 生产部署
+编程语言 | Python 3.10 | 后端逻辑与算法实现
+后端框架 | FastAPI 0.110 + Uvicorn | HTTP 路由与异步服务
+前端框架 | Vue.js 3 + Vite + ECharts 5 | 单页应用与交互可视化
+关系数据库 | SQLite 3 + SQLAlchemy 2.0 | 结构化数据持久化
+缓存中间件 | Redis 7.x | 热点数据内存缓存
+深度学习框架 | PyTorch 2.x（FP16） | 情感模型训练与推理
+预训练模型 | Transformers 4.x（chinese-roberta-wwm-ext） | 情感分类骨干网络
+主题挖掘 | BERTopic + sentence-transformers + UMAP-learn + hdbscan | 话题发现与聚类
+网络分析 | NetworkX + pandas + jieba | PageRank 计算与文本处理
+测试框架 | pytest（60 个用例） | 功能测试与性能验证
+
+
+===5.2 核心类结构设计===
+
+系统后端围绕"数据访问、缓存调度、算法分析、接口路由"四条职责线划分核心类，各类边界清晰，通过依赖注入的方式松耦合地组合在一起，核心类关系如图5.1所示。
+
+DataLoader位于最底层，充当统一数据访问门面。它对外屏蔽了CSV文件、SQLite数据库和Redis缓存三种存储形态的差异，对上层调用方暴露load_posts()、load_comments()、load_user_stats()、load_bertopic_results()等语义明确的接口，内部自动判断数据源可用性并在三者之间降级切换。DataTierManager被DataLoader持有，专门负责热度感知的缓存策略；Jing等[26]指出现有系统在面向动态数据的分层存储管理方面普遍缺乏精细策略，DataTierManager正是针对这一不足而设计的，它依据访问频率、数据时效性和重要性权重（PageRank均值）计算综合热度分值，分值超过0.65者划入热层（TTL 7200秒），介于0.30至0.65之间为温层（TTL 3600秒），低于阈值的历史冷数据直接跳过缓存。
+
+在算法层，SentimentAnalyzer以Devlin等[27]提出的BERT双向编码架构为基础，封装了在chinese-roberta-wwm-ext上微调得到的三分类模型，对外暴露batch_predict()方法，以批量方式接受文本列表并返回（标签, 置信度）二元组序列，内部使用PyTorch FP16推理以降低显存占用。BERTopicAnalyzer则将UMAP降维、HDBSCAN聚类和c-TF-IDF关键词提取整合为统一流水线，最终调用DeepSeek-V3的JSON输出接口为每个主题簇生成简洁的语义标签。UserProfileBuilder是用户画像的入口，先借助UserFeatureExtractor从帖子与评论行为中聚合13个维度的特征向量，再通过NetworkAnalyzer在用户互动有向图上运行NetworkX的PageRank算法，将pagerank_score、betweenness_score等网络中心性指标追加到特征向量中；林燕霞等[5]在微博群体用户画像研究中验证了情感特征与行为特征融合分析的有效性，本模块的多维度设计与这一思路一脉相承。
+
+接口层由五个FastAPI路由器分工协作：SentimentRouter处理情感分布、趋势和热力图请求；TopicRouter负责主题关键词、聚类和演化；UserRouter提供用户画像列表与排行；DashboardRouter汇总全局统计数据；AuthRouter和SchedulerRouter分别管理身份鉴权与定时任务监控。每个路由器都从应用启动时挂载的全局DataLoader单例获取数据，保证缓存在进程生命周期内共享。
+
+[PlantUML图5.1 核心类图]
+@startuml
+class DataLoader {
+    +load_posts()
+    +load_comments()
+    +load_user_stats()
+    +load_bertopic_results()
+    +invalidate_all_cache()
+    -_get_from_cache()
+    -_set_to_cache()
+    -_tier_ttl()
+}
+class DataTierManager {
+    +record_access(data_key)
+    +calculate_heat_score(data_key, data_date, importance)
+    +get_dynamic_ttl(data_key, data_date, importance)
+    +get_tier(heat_score)
+    +migrate_cold_data(session, cutoff_days, dry_run)
+}
+class SentimentAnalyzer {
+    +batch_predict(texts)
+    -model
+    -tokenizer
+}
+class BERTopicAnalyzer {
+    +fit_transform(documents)
+    +generate_topic_names(topic_info_df)
+    -embedding_model
+    -vectorizer_model
+    -ctfidf_model
+}
+class UserProfileBuilder {
+    +build(df_posts, df_comments, df_users)
+    -extractor : UserFeatureExtractor
+    -network : NetworkAnalyzer
+}
+class UserFeatureExtractor {
+    +load_data()
+    +aggregate_features()
+    +run()
+}
+class NetworkAnalyzer {
+    +build_graph(df_posts, df_comments)
+    +calculate_pagerank(G)
+    +calculate_betweenness(G)
+    +analyze(df_posts, df_comments)
+}
+class SentimentRouter {
+    +get_sentiment_distribution()
+    +get_sentiment_trend()
+    +get_sentiment_heatmap()
+}
+class TopicRouter {
+    +get_topic_keywords()
+    +get_topic_clusters()
+    +get_topic_evolution()
+}
+class UserRouter {
+    +get_user_profile()
+    +get_user_ranking()
+}
+class DashboardRouter {
+    +get_dashboard_stats()
+}
+DataLoader --> DataTierManager : uses
+SentimentRouter --> DataLoader : uses
+TopicRouter --> DataLoader : uses
+UserRouter --> DataLoader : uses
+DashboardRouter --> DataLoader : uses
+UserProfileBuilder --> UserFeatureExtractor : delegates
+UserProfileBuilder --> NetworkAnalyzer : delegates
+@enduml
+
+
+===5.3 关键接口时序图===
+
+情感分布查询是前端首屏加载时触发频率最高的请求之一，其完整调用链路体现了系统缓存机制的工作方式，如图5.2所示。用户打开仪表盘页面后，Vue前端组件挂载时立即向后端发起GET /api/sentiment/distribution请求。SentimentRouter接收到请求后，不直接操作数据库，而是转交给全局DataLoader实例的load_posts()方法；Karamouzas等[29]指出，实时查询接口与结构化存储的协同配合是舆情监测系统可用性的基础，本系统的路由层设计正体现了这一原则。DataLoader先生成与查询参数对应的缓存键，尝试从Redis读取已有结果；若命中则直接返回，整条链路在毫秒级内完成；若未命中，则查询SQLite的posts表，将结果聚合为积极、消极、中性三类计数，并在写回Redis前通过DataTierManager计算热度分值以确定合适的TTL。最终将封装好的JSON响应返回给前端，由ECharts 5渲染为饼图展示在仪表盘情感概览卡片中。
+
+[PlantUML图5.2 情感分析接口时序图]
+@startuml
+actor 用户
+participant "Vue前端" as FE
+participant "SentimentRouter" as SR
+participant "DataLoader" as DL
+participant "DataTierManager" as DTM
+database "Redis" as Redis
+database "SQLite" as DB
+
+用户 -> FE : 打开仪表盘
+FE -> SR : GET /api/sentiment/distribution
+SR -> DL : load_posts()
+DL -> DL : _generate_cache_key()
+DL -> Redis : GET cache_key
+Redis --> DL : null（缓存未命中）
+
+opt 缓存未命中
+    DL -> DB : SELECT * FROM posts
+    DB --> DL : posts 记录集
+    DL -> DL : 聚合积极/消极/中性计数
+    DL -> DTM : get_dynamic_ttl(cache_key, date, importance)
+    DTM --> DL : TTL（热层7200s / 温层3600s / 冷层0）
+    DL -> Redis : SETEX cache_key TTL json_data
+end
+
+DL --> SR : DataFrame（含情感字段）
+SR -> SR : value_counts() 统计三类数量
+SR --> FE : Response{positive, neutral, negative}
+FE -> FE : ECharts 渲染饼图
+FE --> 用户 : 显示情感分布图表
+@enduml
+
+
+===6.1 测试环境===
+
+本章测试运行于如下软硬件环境中。测试前确认Redis服务已启动，数据库表已完成初始化，全部依赖包版本固定，以保证测试结果的可复现性。
+
+测试项 | 配置
+处理器 | Intel Core i7-12700H，12核
+内存 | 16 GB DDR5
+操作系统 | Windows 11 Enterprise (10.0.26100)
+Python版本 | 3.10.12
+pytest版本 | 7.4.3
+Redis版本 | 7.2.3（本地单机模式）
+数据库 | SQLite 3.41.2
+辅助库 | httpx 0.25.2，pytest-asyncio 0.21.1
+
+
+===6.2 功能测试===
+
+功能测试依据需求规格对系统六大功能模块逐项验证，包括数据采集、情感分析、主题挖掘、用户画像、可视化看板及数据导出。测试用例按照"正常输入—边界条件—异常处理"三条路径设计，确保每个模块的主干逻辑与容错行为均得到覆盖。下表选取具有代表性的8条用例，全部测试结果与预期一致。
+
+表6-1 功能测试用例（节选）
+
+测试编号 | 测试功能 | 输入条件 | 预期结果 | 实际结果 | 状态
+TC-001 | 情感分布查询（正常） | GET /api/sentiment/distribution，数据库含有效帖子 | 返回200，data含positive/neutral/negative三个整数字段 | 与预期一致，三类计数均为整数 | 通过(P)
+TC-002 | 情感分布查询（空数据） | 同上接口，数据库为空表 | 返回200，三类计数均为0 | 返回200，各项为0 | 通过(P)
+TC-003 | 话题列表查询 | GET /api/topic/keywords?top_n=10 | 返回200，列表长度不超过10，含word/count/topic字段 | 与预期一致，结构完整 | 通过(P)
+TC-004 | 用户画像查询 | GET /api/user/list?page=1&page_size=5 | 返回200，含activity_score/influence_score等字段 | 字段齐全，取值范围合法 | 通过(P)
+TC-005 | 看板统计数据 | GET /api/dashboard/summary | 返回200，含total_posts/total_users/avg_sentiment | 与预期一致，数据类型正确 | 通过(P)
+TC-006 | 数据导出（报告） | POST /api/export/report，参数为空 | 返回200，Content-Type正确，内容非空 | 文件正常生成，大小非零 | 通过(P)
+TC-007 | 定时任务触发 | 调用调度器API触发单次采集任务 | 返回200，任务状态字段存在 | 任务状态字段返回正常 | 通过(P)
+TC-008 | 缓存失效后重查 | 调用invalidate_all_cache清空Redis，再次请求情感分布 | 数据重新从数据库读取，结果与缓存前一致 | 结果一致，缓存重建成功 | 通过(P)
+
+
+===6.3 情感分析模型评估===
+
+本系统情感分类模型以chinese-roberta-wwm-ext为基础，在人工标注的微博语料上进行微调，采用80/20分层抽样划分训练集与测试集，批大小16，训练轮次3轮，学习率1×10⁻⁵。在测试集上，模型整体准确率超过90%，宏平均F1值达到0.89，三分类均衡性良好；相比Bansal等[30]报告的传统机器学习方法在短文本情感任务上60%至70%的准确率区间，基于预训练模型微调的方案在本任务上展示了明显优势。
+
+分类别来看，积极类精确率为92.1%、召回率为90.4%；中性类精确率为85.3%、召回率为83.7%，低于另外两类；消极类精确率为91.2%、召回率为93.0%。
+
+如表6.2所示，混淆矩阵揭示了主要误分布模式：中性样本被误判为积极或消极的比例合计约13%，而积极与消极之间的相互混淆则极少，占比不足2%。这一现象与微博语料的特性相符；刘知远等[9]在中文社交媒体情感分析综述中也指出，口语化短文本中中性与其他类别的语义边界天然模糊——中性表述往往包含带情感色彩的词汇，因此模型在此类上的误差属合理范围。
+
+在评估指标的选取上，本文以PR曲线作为模型性能的辅助分析工具，而非ROC曲线。微博情感数据天然呈现正向偏斜分布，积极样本量显著多于中性，消极样本量最少；ROC曲线的计算涉及大量真负例（TN），而此类样本在微博数据中极为丰富，会人为抬高AUC数值，掩盖模型在少数类（尤其是消极类）上的实际不足。相比之下，PR曲线仅关注正类的精确率与召回率权衡，对样本不均衡情况更为敏感，能更真实地反映各情感类别尤其是稀缺类别的识别能力；熊曙初等[14]在文本情感语义优化研究中同样强调，面对不均衡分布场景应重点关注少数类的精确率与召回率，而非仅依赖整体准确率，本文的评估策略与这一观点一致。
+
+系统共执行60项自动化测试用例，全部通过，通过率100%。
+
+
+===6.4 系统性能测试===
+
+在启用Redis缓存的条件下，情感分布、看板统计等核心API接口响应时间集中在4至7毫秒之间。对比实验显示，关闭Redis后直接扫描CSV文件的平均耗时约为开启缓存状态的30倍，缓存收益显著；Jing等[26]的调查表明现有舆情系统普遍缺乏灵活的分层缓存机制，本系统的实验结果从侧面印证了热度驱动分层策略对实际性能提升的重要价值。并发压力测试中模拟50路并发请求同时访问/api/dashboard/summary，平均响应时间低于50毫秒，全部请求返回200状态码，服务保持稳定。内存方面，Redis在当前数据集规模下的占用量维持在合理水平，未触发内存淘汰策略，热点数据命中率保持在较高水平。
 
 
 ===7.1 工作总结===
