@@ -1,0 +1,159 @@
+第5章 系统实现
+
+5.1 开发环境与技术栈
+
+本系统在 Windows 11 环境下开发，部署时迁移至 Ubuntu 20.04 服务器。开发工具以 PyCharm 为主，借助 Git 进行版本管理。整体技术栈涵盖后端框架、前端渲染、数据存储以及模型训练四个维度，各层依赖相互独立，便于单独升级或替换。
+
+后端以 Python 3.10 为基础语言，选用 FastAPI 0.110 框架并以 Uvicorn 作为 ASGI 服务器，凭借其原生异步支持和自动生成 OpenAPI 文档的特性，显著降低了接口维护成本。前端采用 Vue.js 3 配合 Vite 构建工具，并集成 ECharts 5 实现情感趋势折线图、话题关系力导图、用户画像雷达图等多类交互式可视化组件。持久化层由 SQLite 3 与 SQLAlchemy 2.0 ORM 共同承担，Redis 7.x 则作为热点数据的内存缓存层。模型训练依赖 PyTorch 2.x，开启 FP16 混合精度以加快微调速度；Transformers 4.x 提供 chinese-roberta-wwm-ext 预训练权重的加载与序列化接口。主题挖掘方面引入 BERTopic、sentence-transformers、UMAP-learn 和 hdbscan 四个库协同完成嵌入与聚类；用户画像阶段使用 NetworkX 完成 PageRank 计算，并以 pandas 和 jieba 分别完成表格处理与中文分词。测试框架选用 pytest，全项目共编写 60 个测试用例，覆盖接口、缓存、鉴权和性能等多类场景。
+
+表5-1 主要开发环境与依赖一览
+
+类别 | 名称/版本 | 用途说明
+操作系统 | Windows 11 / Ubuntu 20.04 | 开发环境 / 生产部署
+编程语言 | Python 3.10 | 后端逻辑与算法实现
+后端框架 | FastAPI 0.110 + Uvicorn | HTTP 路由与异步服务
+前端框架 | Vue.js 3 + Vite + ECharts 5 | 单页应用与交互可视化
+关系数据库 | SQLite 3 + SQLAlchemy 2.0 | 结构化数据持久化
+缓存中间件 | Redis 7.x | 热点数据内存缓存
+深度学习框架 | PyTorch 2.x（FP16） | 情感模型训练与推理
+预训练模型 | Transformers 4.x（chinese-roberta-wwm-ext） | 情感分类骨干网络
+主题挖掘 | BERTopic + sentence-transformers + UMAP-learn + hdbscan | 话题发现与聚类
+网络分析 | NetworkX + pandas + jieba | PageRank 计算与文本处理
+测试框架 | pytest（60 个用例） | 功能测试与性能验证
+
+
+5.2 核心类结构设计
+
+系统后端围绕"数据访问、缓存调度、算法分析、接口路由"四条职责线划分核心类，各类边界清晰，通过依赖注入的方式松耦合地组合在一起。
+
+DataLoader 位于最底层，充当统一数据访问门面。它对外屏蔽了 CSV 文件、SQLite 数据库和 Redis 缓存三种存储形态的差异，对上层调用方暴露 load_posts()、load_comments()、load_user_stats()、load_bertopic_results() 等语义明确的接口，内部自动判断数据源可用性并在三者之间降级切换。DataTierManager 被 DataLoader 持有，专门负责热度感知的缓存策略。它依据访问频率、数据时效性和重要性权重（PageRank 均值）计算综合热度分值，分值超过 0.65 者划入热层（TTL 7200 秒），介于 0.30 至 0.65 之间为温层（TTL 3600 秒），低于阈值的历史冷数据则直接跳过缓存。
+
+在算法层，SentimentAnalyzer 封装了在 chinese-roberta-wwm-ext 上微调得到的三分类模型，对外暴露 batch_predict() 方法，以批量方式接受文本列表并返回（标签, 置信度）二元组序列，内部使用 PyTorch FP16 推理以降低显存占用。BERTopicAnalyzer 则将 UMAP 降维、HDBSCAN 聚类和 c-TF-IDF 关键词提取整合为统一流水线，最终调用 DeepSeek-V3 的 JSON 输出接口为每个主题簇生成简洁的语义标签，实现从统计关键词到可读话题名的跨越。UserProfileBuilder 是用户画像的入口，它先借助 UserFeatureExtractor 从帖子与评论行为中聚合 13 个维度的特征向量（含发帖量、回复量、点赞数、粉丝数、首次行动时间差等），再通过 NetworkAnalyzer 在用户互动有向图上运行 NetworkX 的 PageRank 算法，将 pagerank_score、betweenness_score 等网络中心性指标追加到特征向量中。
+
+接口层由五个 FastAPI 路由器分工协作：SentimentRouter 处理情感分布、趋势和热力图请求；TopicRouter 负责主题关键词、聚类、演化和情感条形图；UserRouter 提供用户画像列表与排行；DashboardRouter 汇总全局统计数据；AuthRouter 和 SchedulerRouter 分别管理身份鉴权与定时任务监控。每个路由器都从应用启动时挂载的全局 DataLoader 单例获取数据，保证缓存在进程生命周期内共享。
+
+```plantuml
+@startuml
+class DataLoader {
+    +load_posts()
+    +load_comments()
+    +load_user_stats()
+    +load_bertopic_results()
+    +invalidate_all_cache()
+    -_get_from_cache()
+    -_set_to_cache()
+    -_tier_ttl()
+}
+
+class DataTierManager {
+    +record_access(data_key)
+    +calculate_heat_score(data_key, data_date, importance)
+    +get_dynamic_ttl(data_key, data_date, importance)
+    +get_tier(heat_score)
+    +get_tier_stats()
+    +migrate_cold_data(session, cutoff_days, dry_run)
+}
+
+class SentimentAnalyzer {
+    +batch_predict(texts)
+    -model
+    -tokenizer
+}
+
+class BERTopicAnalyzer {
+    +fit_transform(documents)
+    +generate_topic_names(topic_info_df)
+    -embedding_model
+    -vectorizer_model
+    -ctfidf_model
+}
+
+class UserProfileBuilder {
+    +build(df_posts, df_comments, df_users)
+    -extractor : UserFeatureExtractor
+    -network : NetworkAnalyzer
+}
+
+class UserFeatureExtractor {
+    +load_data()
+    +aggregate_features()
+    +run()
+}
+
+class NetworkAnalyzer {
+    +build_graph(df_posts, df_comments)
+    +calculate_pagerank(G)
+    +calculate_betweenness(G)
+    +analyze(df_posts, df_comments)
+}
+
+class SentimentRouter {
+    +get_sentiment_distribution()
+    +get_sentiment_trend()
+    +get_sentiment_heatmap()
+}
+
+class TopicRouter {
+    +get_topic_keywords()
+    +get_topic_clusters()
+    +get_topic_evolution()
+    +get_dynamic_topic_evolution()
+}
+
+class UserRouter {
+    +get_user_profile()
+    +get_user_ranking()
+}
+
+class DashboardRouter {
+    +get_dashboard_stats()
+}
+
+DataLoader --> DataTierManager : uses
+SentimentRouter --> DataLoader : uses
+TopicRouter --> DataLoader : uses
+UserRouter --> DataLoader : uses
+DashboardRouter --> DataLoader : uses
+UserProfileBuilder --> UserFeatureExtractor : delegates
+UserProfileBuilder --> NetworkAnalyzer : delegates
+@enduml
+```
+
+
+5.3 关键接口时序图
+
+情感分布查询是前端首屏加载时触发频率最高的请求之一，其完整调用链路体现了系统缓存机制的工作方式。用户打开仪表盘页面后，Vue 前端组件挂载时立即向后端发起 GET /api/sentiment/distribution 请求。SentimentRouter 接收到请求后，不直接操作数据库，而是转交给全局 DataLoader 实例的 load_posts() 方法。DataLoader 先调用 _generate_cache_key() 生成与查询参数相关的缓存键，随后尝试从 Redis 读取已有结果。若命中缓存则直接返回，整条链路在毫秒级内完成；若未命中，则查询 SQLite 的 posts 表，将结果聚合为积极、消极、中性三类计数，并在写回 Redis 前通过 DataTierManager 计算该数据的热度分值，据此确定 TTL（热层 7200 秒、温层 3600 秒，冷数据不缓存）。最终将封装好的 JSON 响应返回给前端，由 ECharts 5 渲染为饼图展示在仪表盘的情感概览卡片中。
+
+```plantuml
+@startuml
+actor 用户
+participant "Vue前端" as FE
+participant "SentimentRouter" as SR
+participant "DataLoader" as DL
+participant "DataTierManager" as DTM
+database "Redis" as Redis
+database "SQLite" as DB
+
+用户 -> FE : 打开仪表盘
+FE -> SR : GET /api/sentiment/distribution
+SR -> DL : load_posts()
+DL -> DL : _generate_cache_key()
+DL -> Redis : GET cache_key
+Redis --> DL : null（缓存未命中）
+
+opt 缓存未命中
+    DL -> DB : SELECT * FROM posts
+    DB --> DL : posts 记录集
+    DL -> DL : 聚合积极/消极/中性计数
+    DL -> DTM : get_dynamic_ttl(cache_key, date, importance)
+    DTM --> DL : TTL（热层7200s / 温层3600s / 冷层0）
+    DL -> Redis : SETEX cache_key TTL json_data
+end
+
+DL --> SR : DataFrame（含情感字段）
+SR -> SR : value_counts() 统计三类数量
+SR --> FE : Response{positive, neutral, negative}
+FE -> FE : ECharts 渲染饼图
+FE --> 用户 : 显示情感分布图表
+@enduml
+```
