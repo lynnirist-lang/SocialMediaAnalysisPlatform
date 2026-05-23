@@ -103,6 +103,8 @@ async def data_tier_stats():
     if data_loader.tier_manager is None:
         return {"error": "DataTierManager 未启用（Redis 不可用）"}
     stats = data_loader.tier_manager.get_tier_stats()
+    if "error" in stats:
+        return stats
     tiers = data_loader.tier_manager.TIERS
     return {
         "tier_distribution": stats,
