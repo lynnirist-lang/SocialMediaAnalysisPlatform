@@ -493,13 +493,14 @@ class DataCollectorScheduler:
         print("   [START] 5.1.5 情感预测（串行执行）...")
         sentiment_ok = False
         try:
-            sentiment_script = project_root / "data_collector" / "model" / "predict.py" # 假设你把逻辑移到了这个文件
+            sentiment_script = project_root / "data_collector" / "model" / "predict.py"
             if sentiment_script.exists():
                 result = subprocess.run(
-                    [sys.executable, str(sentiment_script), str(posts_file), str(output_file)],
+                    [sys.executable, str(sentiment_script)],
                     cwd=str(project_root),
                     env=env,
-                    timeout=600, # 根据实际情况调整超时
+                    timeout=600,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                 )
                 if result.returncode == 0:
                     sentiment_ok = True
@@ -540,7 +541,8 @@ class DataCollectorScheduler:
                 [sys.executable, str(user_char_script)],
                 cwd=str(project_root),
                 timeout=3600,
-                env=env
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # Windows: 隔离 Ctrl+C 信号
             )
 
             if result.returncode == 0:
