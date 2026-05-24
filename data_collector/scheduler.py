@@ -448,7 +448,7 @@ class DataCollectorScheduler:
             self._write_status(is_running=False, last_run=run_record)
 
     def _trigger_downstream_tasks(self, env=None):
-        """触发下游分析任务(BERTopic + 情感分析并行 + 用户画像)"""
+        """触发下游分析任务（串行执行，避免并行导入导致线程冲突）"""
         project_root = Path(__file__).parent.parent
 
         if env is None:
@@ -456,68 +456,62 @@ class DataCollectorScheduler:
 
         today_str = datetime.now().strftime('%Y%m%d')
 
-        # 6.1 BERTopic：若今日输出已存在则跳过，否则以非阻塞方式启动
+        # 6.1 BERTopic：若今日输出已存在则跳过，否则串行执行
         bertopic_script = project_root / "data_collector" / "analysis" / "run_bertopic.py"
-        bertopic_proc = None
-
         existing_topic = DynamicFileManager.get_latest_bertopic_topics()
+        bertopic_ok = False
+
         if existing_topic and today_str in existing_topic.name:
             print(f"   [SKIP] 今日 BERTopic 输出已存在: {existing_topic.name}，跳过重训练")
+            bertopic_ok = True
         elif bertopic_script.exists():
-            print("   [START] 5.1 BERTopic 主题分析（后台启动）...")
-            bertopic_proc = subprocess.Popen(
-                [sys.executable, str(bertopic_script)],
-                cwd=str(project_root),
-                env=env
-            )
-        else:
-            print(f"   [WARN] BERTopic 脚本不存在: {bertopic_script}")
-
-        # 6.1.5 情感分析（与 BERTopic 并行执行）
-        print("   [START] 5.1.5 情感预测（与 BERTopic 并行）...")
-        sentiment_ok = False
-        try:
-            from data_collector.model.predict import process_file
-
-            posts_file = DynamicFileManager.get_latest_posts_cleaned()
-            if posts_file:
-                match = re.search(r'(\d{8})', posts_file.name)
-                date_str = match.group(1) if match else today_str
-                output_file = SENTIMENT_DATA_DIR / f"posts_model_{date_str}.csv"
-
-                if not output_file.exists():
-                    print(f"      [RUN] 执行情感预测: {posts_file.name}")
-                    success = process_file(posts_file, output_file, "posts")
-                    if not success:
-                        print("      [WARN] 情感预测失败")
-                    else:
-                        sentiment_ok = True
-                else:
-                    print(f"      [SKIP] 情感文件已存在: {output_file.name}")
-                    sentiment_ok = True
-            else:
-                print("      [WARN] 未找到帖子文件，跳过情感分析")
-        except Exception as e:
-            print(f"      [WARN] 情感分析失败: {e}")
-            import traceback
-            traceback.print_exc()
-
-        # 等待 BERTopic 完成（最多 30 分钟）
-        if bertopic_proc is not None:
-            print("   [WAIT] 等待 BERTopic 完成...")
+            print("   [START] 5.1 BERTopic 主题分析（串行执行）...")
             try:
-                bertopic_proc.wait(timeout=1800)
-                if bertopic_proc.returncode == 0:
+                result = subprocess.run(
+                    [sys.executable, str(bertopic_script)],
+                    cwd=str(project_root),
+                    env=env,
+                    timeout=1800,
+                )
+                if result.returncode == 0:
+                    bertopic_ok = True
                     topics_file = DynamicFileManager.get_latest_bertopic_topics()
                     if topics_file:
                         print(f"   [OK] BERTopic 完成 -> {topics_file.name}")
                     else:
                         print("   [WARN] BERTopic 执行成功但未找到输出文件")
                 else:
-                    print(f"   [FAIL] BERTopic 失败 (退出码: {bertopic_proc.returncode})")
+                    print(f"   [FAIL] BERTopic 失败 (退出码: {result.returncode})")
             except subprocess.TimeoutExpired:
-                bertopic_proc.kill()
                 print("   [FAIL] BERTopic 超时 (30min)，已终止")
+            except Exception as e:
+                print(f"   [FAIL] BERTopic 执行异常: {e}")
+        else:
+            print(f"   [WARN] BERTopic 脚本不存在: {bertopic_script}")
+
+        # 6.1.5 情感分析（串行执行）
+        print("   [START] 5.1.5 情感预测（串行执行）...")
+        sentiment_ok = False
+        try:
+            sentiment_script = project_root / "data_collector" / "model" / "predict.py" # 假设你把逻辑移到了这个文件
+            if sentiment_script.exists():
+                result = subprocess.run(
+                    [sys.executable, str(sentiment_script), str(posts_file), str(output_file)],
+                    cwd=str(project_root),
+                    env=env,
+                    timeout=600, # 根据实际情况调整超时
+                )
+                if result.returncode == 0:
+                    sentiment_ok = True
+                    print(" [OK] 情感预测执行成功")
+                else:
+                    print(f" [FAIL] 情感预测失败 (退出码: {result.returncode})")
+            else:
+                print(f" [WARN] 情感预测脚本不存在: {sentiment_script}")
+        except Exception as e:
+            print(f"      [WARN] 情感分析失败: {e}")
+            import traceback
+            traceback.print_exc()
 
         # 数据合并（BERTopic + 情感均完成后执行）
         try:
