@@ -49,7 +49,7 @@ except Exception:
 OUTPUT_FILE = ANALYSIS_DATA_DIR / "dynamic_topics.json"
 
 SIMILARITY_THRESHOLD = 0.60   # 跨期主题对齐阈值
-MIN_DOCS_PER_SLICE = 5        # 每片最少文档数（过少则跳过）
+MIN_DOCS_PER_SLICE = 30       # 每片最少文档数（过少则跳过）
 MAX_CHAINS = 8                # 最终保留的演化链数
 MIN_CHAIN_PERIODS = 2         # 链至少跨越的期数（过短则过滤）
 
@@ -60,7 +60,7 @@ def _tokenize_zh(text: str) -> str:
     import jieba
     return " ".join(
         t for t in jieba.cut(str(text))
-        if t.strip() and t not in _STOPWORDS
+        if len(t.strip()) > 1 and t not in _STOPWORDS
     )
 
 
@@ -121,9 +121,15 @@ def _extract_slice_topics(model, embeddings, topic_assignments):
     return result
 
 
+def _kw_overlap(kws1: list, kws2: list) -> bool:
+    """两个主题的关键词集合是否有至少 1 个共同词。"""
+    return bool(set(kws1) & set(kws2))
+
+
 def _align_topics(prev_topics, curr_topics):
     """
     贪婪 cosine 匹配两个时间片之间的主题。
+    双重条件：cosine 相似度 >= 阈值 且 关键词至少有 1 个重叠。
     返回 [(prev_idx, curr_idx, similarity)]，按相似度降序。
     """
     if not prev_topics or not curr_topics:
@@ -133,13 +139,14 @@ def _align_topics(prev_topics, curr_topics):
         np.stack([t["centroid"] for t in curr_topics]),
     )
     matched, used_curr = [], set()
-    # 按最大相似度贪婪选择
     order = sorted(
         ((i, int(np.argmax(sims[i])), float(np.max(sims[i]))) for i in range(len(prev_topics))),
         key=lambda x: -x[2],
     )
     for pi, ci, sim in order:
-        if sim >= SIMILARITY_THRESHOLD and ci not in used_curr:
+        if (sim >= SIMILARITY_THRESHOLD
+                and ci not in used_curr
+                and _kw_overlap(prev_topics[pi]["keywords"], curr_topics[ci]["keywords"])):
             matched.append((pi, ci, sim))
             used_curr.add(ci)
     return matched
