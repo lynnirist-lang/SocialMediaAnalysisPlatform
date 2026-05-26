@@ -2,6 +2,7 @@ import ast
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,45 @@ import pandas as pd
 from backend.models.schemas import Response
 from backend.services.data_loader import DataLoader
 from functools import lru_cache
+
+# 匹配数字占位符名称，如 "话题0"、"话题_3"（generate_topic_name.py 失败时的回退值）
+_PLACEHOLDER_RE = re.compile(r'^话题_?\d+$')
+
+
+def _extract_display_name(row) -> str:
+    """
+    从 BERTopic 行数据中推导展示用的话题名称。
+    优先级：topic_name（非占位符）→ BERTopic Name 列去除编号前缀 → 关键词拼接 → 话题{id}
+    当 generate_topic_name.py 未运行或 API 调用失败时作为保底逻辑。
+    """
+    topic_id = row.get('Topic', '?')
+
+    # 1. topic_name 列：存在且不是占位符时直接使用
+    raw = row.get('topic_name')
+    if raw is not None:
+        s = str(raw).strip()
+        if s and s not in ('nan', '<NA>') and not _PLACEHOLDER_RE.match(s):
+            return s
+
+    # 2. BERTopic 自动生成的 Name 列格式为 "3_关键词1_关键词2_..."
+    bname = str(row.get('Name') or '').strip()
+    if bname and bname not in ('nan', '<NA>'):
+        parts = bname.split('_', 1)
+        if len(parts) == 2 and parts[0].lstrip('-').isdigit():
+            kws = [w for w in parts[1].split('_') if len(w) > 1][:3]
+            if kws:
+                return '/'.join(kws)
+
+    # 3. 从 Representation 列提取前 2 个关键词
+    try:
+        kw_list = ast.literal_eval(str(row.get('Representation') or '[]'))
+        kws = [str(k).strip() for k in kw_list if len(str(k).strip()) > 1][:2]
+        if kws:
+            return '/'.join(kws)
+    except Exception:
+        pass
+
+    return f"话题{topic_id}"
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DYNAMIC_TOPICS_FILE = Path(project_root) / "words" / "analysis_data" / "dynamic_topics.json"
@@ -71,7 +111,7 @@ async def get_topic_keywords(top_n: int = 20):
             # 降级：按逗号分割
             keywords = str(representation).split(',')
 
-        topic_name = row.get('topic_name', f"话题{row.get('Topic', '未知')}")
+        topic_name = _extract_display_name(row)
         count = int(row.get('Count', 0))
 
         for kw in keywords[:5]:  # 每个主题取前5个关键词
@@ -128,7 +168,7 @@ async def get_topic_clusters():
             count = int(row['Count'])
             size = math.log(count + 1) * 12
 
-            topic_name = row.get('topic_name', f"话题{row.get('Topic', '未知')}")
+            topic_name = _extract_display_name(row)
 
             nodes.append({
                 "name": topic_name,
@@ -238,9 +278,9 @@ async def get_topic_evolution(interval: str = "week", top_n: int = 6):
         if not df_topics_meta.empty and 'Topic' in df_topics_meta.columns:
             for _, row in df_topics_meta.iterrows():
                 tid = row.get('Topic')
-                name = row.get('topic_name', f'话题{tid}')
+                name = _extract_display_name(row)
                 if tid is not None and not (isinstance(tid, float) and math.isnan(tid)):
-                    topic_name_map[int(tid)] = str(name)
+                    topic_name_map[int(tid)] = name
 
         # 选出热度 top_n 个话题
         hot_topics = df['Topic'].value_counts().head(top_n).index.tolist()
@@ -304,8 +344,10 @@ async def get_dynamic_topic_evolution():
         best = _select_chain_name(chain)
         if best is None:
             continue  # 全虚词链，直接丢弃
-        if chain["name"] != best:
-            chain = dict(chain, name=best)  # 浅拷贝，不改原 JSON
+        current = str(chain.get("name", "")).strip()
+        # 仅当现有名字本身是噪声时才用关键词兜底，保留 LLM 生成的语义标题
+        if not current or len(current) <= 1 or current.isdigit() or current in _DTM_STOPWORDS:
+            chain = dict(chain, name=best)
         cleaned_chains.append(chain)
     chains = cleaned_chains
 
@@ -360,15 +402,13 @@ async def get_topic_sentiment_bar():
         if df_topics.empty:
             return Response(code=200, data={"topics": [], "categories": [], "positive": [], "neutral": [], "negative": []})
 
-        # 兼容处理：优先使用 category，其次 topic_name
+        # 优先使用 category 列；否则从关键词推导展示名称
         if 'category' in df_topics.columns:
             topic_cat_map = df_topics[['Topic', 'category']].drop_duplicates()
-        elif 'topic_name' in df_topics.columns:
-            topic_cat_map = df_topics[['Topic', 'topic_name']].drop_duplicates()
-            topic_cat_map.rename(columns={'topic_name': 'category'}, inplace=True)
         else:
             topic_cat_map = df_topics[['Topic']].copy()
-            topic_cat_map['category'] = topic_cat_map['Topic'].apply(lambda x: f"话题{x}")
+            topic_cat_map['category'] = df_topics.apply(_extract_display_name, axis=1)
+            topic_cat_map = topic_cat_map.drop_duplicates()
 
         df_posts = data_loader.load_posts()
         if df_posts.empty or 'sentiment' not in df_posts.columns:
